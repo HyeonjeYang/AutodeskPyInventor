@@ -15,9 +15,9 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.inventor
-def test_inventor_disk(tmp_path: Path) -> None:
+def test_inventor_disk(inventor_tmp_path: Path) -> None:
     app = api.connect(visible=False)
-    path = tmp_path / "disk.ipt"
+    path = inventor_tmp_path / "disk.ipt"
     part = api.Part.new(app=app, name="disk", path=path)
 
     part.disk(od=80, id=25, thickness=8)

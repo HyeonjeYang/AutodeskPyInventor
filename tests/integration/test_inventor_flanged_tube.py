@@ -15,9 +15,9 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.inventor
-def test_inventor_flanged_tube(tmp_path: Path) -> None:
+def test_inventor_flanged_tube(inventor_tmp_path: Path) -> None:
     app = api.connect(visible=False)
-    path = tmp_path / "flanged_tube.ipt"
+    path = inventor_tmp_path / "flanged_tube.ipt"
     part = api.Part.new(app=app, name="flanged_tube", path=path)
 
     part.flanged_tube(

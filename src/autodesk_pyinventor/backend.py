@@ -98,7 +98,9 @@ class InventorBackend:
                 f"Original COM error: {exc}"
             ) from exc
 
-        if not hasattr(document, "ComponentDefinition"):
+        document = _cast_to_part_document(document)
+        part_document_type = self._constant("kPartDocumentObject", 12290)
+        if int(getattr(document, "DocumentType", 0)) != part_document_type:
             raise InventorDocumentError(
                 f"Opened document at {copied_path}, but it is not an Inventor part document."
             )
@@ -244,3 +246,11 @@ def _try_set_attribute(target: Any, name: str, value: object) -> bool:
     except Exception:
         return False
     return True
+
+
+def _cast_to_part_document(document: Any) -> Any:
+    try:
+        win32_client = cast(Any, import_module("win32com.client"))
+        return win32_client.CastTo(document, "PartDocument")
+    except Exception:
+        return document
