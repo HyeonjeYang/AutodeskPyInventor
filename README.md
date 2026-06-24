@@ -65,6 +65,7 @@ part.close()
 
 ```powershell
 autodesk-pyinventor doctor
+autodesk-pyinventor doctor --strict
 
 autodesk-pyinventor disk `
   --output C:\temp\washer.ipt `
@@ -169,6 +170,8 @@ Run:
 ```powershell
 autodesk-pyinventor doctor
 ```
+
+Use `--strict` when a failing readiness check should return a nonzero exit code.
 
 Common fixes:
 

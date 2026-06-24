@@ -27,7 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("doctor", help="Check local Autodesk Inventor automation readiness.")
+    doctor = subparsers.add_parser("doctor", help="Check local Autodesk Inventor readiness.")
+    doctor.add_argument(
+        "--strict",
+        action="store_true",
+        help="Return exit code 1 when any readiness check fails.",
+    )
 
     disk = subparsers.add_parser("disk", help="Generate a disk, optionally with a center bore.")
     _add_common_args(disk)
@@ -113,7 +118,7 @@ def _plan_name(args: argparse.Namespace) -> str:
 
 def run(args: argparse.Namespace) -> int:
     if args.command == "doctor":
-        return run_doctor()
+        return run_doctor(strict=args.strict)
 
     plan = plan_from_args(args)
 
@@ -144,18 +149,22 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_doctor() -> int:
+def run_doctor(*, strict: bool = False) -> int:
     lines = ["AutodeskPyInventor doctor", ""]
+    checks: list[bool] = []
+
+    def add_check(label: str, value: str, ok: bool, fix: str | None = None) -> None:
+        checks.append(ok)
+        lines.append(_status(label, value, ok, fix))
+
     current_os = platform.platform()
     is_windows = os.name == WINDOWS_OS_NAME
-    lines.append(_status("OS", current_os, is_windows, "Autodesk Inventor requires Windows."))
-    lines.append(
-        _status(
-            "Python",
-            platform.python_version(),
-            sys.version_info >= (3, 10),
-            "Install Python 3.10 or newer.",
-        )
+    add_check("OS", current_os, is_windows, "Autodesk Inventor requires Windows.")
+    add_check(
+        "Python",
+        platform.python_version(),
+        sys.version_info >= (3, 10),
+        "Install Python 3.10 or newer.",
     )
 
     win32_client: Any | None = None
@@ -165,13 +174,11 @@ def run_doctor() -> int:
         pywin32_ok = True
     except ImportError:
         pass
-    lines.append(
-        _status(
-            "pywin32",
-            "installed" if pywin32_ok else "missing",
-            pywin32_ok,
-            "pywin32 is not installed. Run: python -m pip install pywin32",
-        )
+    add_check(
+        "pywin32",
+        "installed" if pywin32_ok else "missing",
+        pywin32_ok,
+        "pywin32 is not installed. Run: python -m pip install pywin32",
     )
 
     app: Any | None = None
@@ -180,73 +187,61 @@ def run_doctor() -> int:
         try:
             app = win32_client.gencache.EnsureDispatch("Inventor.Application")
             constants = win32_client.constants
-            lines.append(_status("Inventor COM", "connected", True))
+            add_check("Inventor COM", "connected", True)
         except Exception:
-            lines.append(
-                _status(
-                    "Inventor COM",
-                    "failed",
-                    False,
-                    "Inventor COM connection failed. Make sure Autodesk Inventor is installed.",
-                )
+            add_check(
+                "Inventor COM",
+                "failed",
+                False,
+                "Inventor COM connection failed. Make sure Autodesk Inventor is installed.",
             )
     else:
-        lines.append(
-            _status(
-                "Inventor COM",
-                "skipped",
-                False,
-                "Inventor COM can only be checked on Windows with pywin32 installed.",
-            )
+        add_check(
+            "Inventor COM",
+            "skipped",
+            False,
+            "Inventor COM can only be checked on Windows with pywin32 installed.",
         )
 
     version = _inventor_version(app)
-    lines.append(_status("Inventor version", version or "unavailable", version is not None))
+    add_check("Inventor version", version or "unavailable", version is not None)
 
     constants_ok = constants is not None
-    lines.append(
-        _status(
-            "Constants",
-            "loaded" if constants_ok else "unavailable",
-            constants_ok,
-            "Constants are unavailable. Try clearing the win32com gen_py cache.",
-        )
+    add_check(
+        "Constants",
+        "loaded" if constants_ok else "unavailable",
+        constants_ok,
+        "Constants are unavailable. Try clearing the win32com gen_py cache.",
     )
 
     if app is not None:
         try:
             template = find_standard_part_template(app, constants=constants)
-            lines.append(_status("Part template", f"found ({template})", True))
+            add_check("Part template", f"found ({template})", True)
         except Exception:
-            lines.append(
-                _status(
-                    "Part template",
-                    "not found",
-                    False,
-                    "Template not found. Pass --template C:\\path\\to\\Standard.ipt",
-                )
+            add_check(
+                "Part template",
+                "not found",
+                False,
+                "Template not found. Pass --template C:\\path\\to\\Standard.ipt",
             )
     else:
-        lines.append(
-            _status(
-                "Part template",
-                "skipped",
-                False,
-                "Template lookup requires a working Inventor COM connection.",
-            )
+        add_check(
+            "Part template",
+            "skipped",
+            False,
+            "Template lookup requires a working Inventor COM connection.",
         )
 
-    lines.append(
-        _status(
-            "Writable output directory",
-            str(Path.cwd()),
-            _cwd_is_writable(),
-            "Current directory is not writable. Choose another output directory.",
-        )
+    add_check(
+        "Writable output directory",
+        str(Path.cwd()),
+        _cwd_is_writable(),
+        "Current directory is not writable. Choose another output directory.",
     )
 
     print("\n".join(lines))
-    return 0
+    return 1 if strict and not all(checks) else 0
 
 
 def _status(label: str, value: str, ok: bool, fix: str | None = None) -> str:

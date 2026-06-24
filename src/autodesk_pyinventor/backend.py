@@ -8,15 +8,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
-from .constants import (
-    CUT_OPERATION,
-    INVENTOR_PROG_ID,
-    JOIN_OPERATION,
-    POSITIVE_EXTENT_DIRECTION,
-    STL_SUFFIX,
-    WINDOWS_OS_NAME,
-    XY_WORK_PLANE_INDEX,
-)
+from .constants import INVENTOR_PROG_ID, STL_SUFFIX, WINDOWS_OS_NAME, XY_WORK_PLANE_INDEX
 from .documents import copy_template_to_part, find_standard_part_template, require_part_path
 from .exceptions import (
     InventorConnectionError,
@@ -99,7 +91,7 @@ class InventorBackend:
             ) from exc
 
         document = _cast_to_part_document(document)
-        part_document_type = self._constant("kPartDocumentObject", 12290)
+        part_document_type = self._constant("kPartDocumentObject")
         if int(getattr(document, "DocumentType", 0)) != part_document_type:
             raise InventorDocumentError(
                 f"Opened document at {copied_path}, but it is not an Inventor part document."
@@ -156,7 +148,7 @@ class InventorBackend:
             document=document,
             diameter_mm=operation.diameter_mm,
             z_mm=operation.z_mm,
-            operation=self._constant("kJoinOperation", JOIN_OPERATION),
+            operation=self._constant("kJoinOperation"),
             label="outer cylinder",
             distance_mm=operation.length_mm,
             through_all_symmetric=False,
@@ -167,7 +159,7 @@ class InventorBackend:
             document=document,
             diameter_mm=operation.diameter_mm,
             z_mm=0,
-            operation=self._constant("kCutOperation", CUT_OPERATION),
+            operation=self._constant("kCutOperation"),
             label="center bore",
             distance_mm=None,
             through_all_symmetric=True,
@@ -199,13 +191,11 @@ class InventorBackend:
                 )
             )
             if through_all_symmetric:
-                extrude_definition.SetThroughAllExtent(
-                    self._constant("kSymmetricExtentDirection", POSITIVE_EXTENT_DIRECTION)
-                )
+                extrude_definition.SetThroughAllExtent(self._constant("kSymmetricExtentDirection"))
             elif distance_mm is not None:
                 extrude_definition.SetDistanceExtent(
                     mm_to_cm(distance_mm),
-                    self._constant("kPositiveExtentDirection", POSITIVE_EXTENT_DIRECTION),
+                    self._constant("kPositiveExtentDirection"),
                 )
             else:
                 raise InventorPlanError(
@@ -214,6 +204,8 @@ class InventorBackend:
 
             feature = component_definition.Features.ExtrudeFeatures.Add(extrude_definition)
             _try_set_attribute(feature, "Name", label)
+        except InventorGeometryError:
+            raise
         except Exception as exc:
             raise InventorGeometryError(
                 f"Could not create {label} with diameter {diameter_mm:g} mm. "
@@ -236,8 +228,14 @@ class InventorBackend:
                 f"Original COM error: {exc}"
             ) from exc
 
-    def _constant(self, name: str, fallback: int) -> int:
-        return int(getattr(self.constants, name, fallback))
+    def _constant(self, name: str) -> int:
+        value = getattr(self.constants, name, None)
+        if value is None:
+            raise InventorGeometryError(
+                f"Inventor constant {name} is unavailable. "
+                "Try clearing the win32com gen_py cache."
+            )
+        return int(value)
 
 
 def _try_set_attribute(target: Any, name: str, value: object) -> bool:

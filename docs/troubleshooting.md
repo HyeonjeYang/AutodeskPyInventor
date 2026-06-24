@@ -9,6 +9,12 @@ autodesk-pyinventor doctor
 It checks OS, Python, pywin32, Inventor COM, constants, part template discovery, and current directory
 writability.
 
+Use strict mode in automation:
+
+```powershell
+autodesk-pyinventor doctor --strict
+```
+
 ## `pywin32 is not installed`
 
 Run:

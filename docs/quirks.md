@@ -4,6 +4,7 @@ Current avoidance rules:
 
 - Use `win32com.client.gencache.EnsureDispatch("Inventor.Application")`.
 - Load `win32com.client.constants` after dispatch.
+- Fail clearly if required Inventor constants are unavailable.
 - Do not use `Documents.Add()` for MVP part creation.
 - Find a standard `.ipt` template, copy it to the output path, then open the copy.
 - Never save modifications back to the original template.

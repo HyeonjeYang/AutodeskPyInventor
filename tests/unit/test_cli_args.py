@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import autodesk_pyinventor.cli as cli
 from autodesk_pyinventor.cli import build_parser, main, plan_from_args
 
 
@@ -103,3 +104,20 @@ def test_cli_doctor_prints_diagnostics(capsys: pytest.CaptureFixture[str]) -> No
     assert exit_code == 0
     assert "AutodeskPyInventor doctor" in captured.out
     assert "Python:" in captured.out
+
+
+def test_cli_doctor_strict_returns_failure_when_checks_fail(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail_import(name: str) -> object:
+        raise ImportError(name)
+
+    monkeypatch.setattr(cli, "WINDOWS_OS_NAME", "not-windows")
+    monkeypatch.setattr(cli, "import_module", fail_import)
+
+    exit_code = cli.main(["doctor", "--strict"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "FAIL" in captured.out
