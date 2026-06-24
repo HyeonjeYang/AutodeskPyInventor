@@ -1,20 +1,42 @@
 # Troubleshooting
 
-## `pywin32 is required`
-
-Install the package on Windows with:
+## Start with doctor
 
 ```powershell
-pip install -e .
+autodesk-pyinventor doctor
 ```
 
-## `Could not start or connect to Autodesk Inventor through COM`
+It checks OS, Python, pywin32, Inventor COM, constants, part template discovery, and current directory
+writability.
 
-Check that Autodesk Inventor is installed and can be started normally.
+## `pywin32 is not installed`
+
+Run:
+
+```powershell
+python -m pip install pywin32
+```
+
+## `Inventor COM connection failed`
+
+Make sure Autodesk Inventor is installed and starts normally.
+
+## `Constants are unavailable`
+
+Try clearing the `win32com` `gen_py` cache, then run `autodesk-pyinventor doctor` again.
+
+## `Template not found`
+
+Pass a template explicitly:
+
+```powershell
+autodesk-pyinventor disk --template C:\path\to\Standard.ipt --output C:\temp\disk.ipt --od 80
+```
 
 ## CLI dry run works but real execution fails
 
-Dry run only validates the feature plan. Real execution also needs Windows, pywin32, and Autodesk Inventor.
+Dry run only validates the feature plan. Real execution also needs Windows, pywin32, Autodesk
+Inventor, a writable output directory, and a part template.
 
 ## Integration tests are skipped
 

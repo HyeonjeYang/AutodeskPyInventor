@@ -1,12 +1,29 @@
 # Inventor COM Quirks
 
-Inventor COM automation is stateful and Windows-only.
-
 Current avoidance rules:
 
-- Generate a `FeaturePlan` before touching COM.
-- Create base solids before center bores.
-- Defer bores until after joined flange geometry exists.
-- Use millimeters in public APIs and convert to centimeters only inside the backend.
-- Copy user-provided part templates before passing them to Inventor.
-- Keep the backend limited to supported high-level feature steps.
+- Use `win32com.client.gencache.EnsureDispatch("Inventor.Application")`.
+- Load `win32com.client.constants` after dispatch.
+- Do not use `Documents.Add()` for MVP part creation.
+- Find a standard `.ipt` template, copy it to the output path, then open the copy.
+- Never save modifications back to the original template.
+- Use Inventor collection `.Item(n)` calls.
+- Treat Inventor collections as one-indexed.
+- Use `WorkPlanes.Item(3)` for XY.
+- Do not create a zero-offset work plane.
+- Hide nonzero offset work planes.
+- Do not rely on annular profile detection from concentric circles.
+- Create all outer solids first.
+- Apply the central bore once at the end.
+- Use `part_doc.SaveAs(stl_path, True)` for STL export.
+
+Assembly placement rule for future work:
+
+```python
+tg = app.TransientGeometry
+matrix = tg.CreateMatrix()
+vec = tg.CreateVector(x_cm, y_cm, z_cm)
+matrix.SetTranslation(vec)
+```
+
+Do not write translation by assigning matrix cells.

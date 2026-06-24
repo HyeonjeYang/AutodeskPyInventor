@@ -1,14 +1,32 @@
 # Design
 
-AutodeskPyInventor is an Inventor-safe geometry builder, not a FreeCAD clone and not a generic wrapper over every Inventor COM object.
+AutodeskPyInventor is an Inventor-safe geometry builder.
 
-The public API is millimeter-first. Recipes create a serializable `FeaturePlan` before any COM operation runs. The Inventor backend executes only known feature steps.
+It is not a FreeCAD clone, an MCP server, or a generic wrapper over every Inventor COM object.
+The library builds a `FeaturePlan` first, validates it, and only then executes it through a narrow
+Inventor backend.
 
-Supported first recipes:
+## Plan model
 
-- disk
-- washer
-- tube
-- flanged tube
+Core operations:
 
-The planning layer exists so dry runs, unit tests, and CLI checks can run without Autodesk Inventor installed.
+- `OuterCylinder`
+- `DeferredCenterBore`
+- `ApplyDeferredBores`
+
+The flanged tube recipe orders operations as:
+
+1. outer body cylinder
+2. outer flange cylinder
+3. deferred center bore
+4. apply deferred bores
+
+That ordering avoids repeated through-all cuts after each annulus.
+
+## Execution model
+
+The public API uses millimeters. Inventor length values are converted to centimeters only inside
+the backend.
+
+The backend supports only planned operations from this package. Arbitrary Inventor COM automation is
+outside the v0.1 scope.
