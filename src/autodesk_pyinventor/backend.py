@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from .constants import (
     CUT_OPERATION,
@@ -44,18 +45,18 @@ class InventorBackend:
             raise PlatformNotSupportedError("Autodesk Inventor COM automation is Windows-only.")
 
         try:
-            import pythoncom  # type: ignore[import-not-found]
-            import win32com.client  # type: ignore[import-not-found]
+            pythoncom = cast(Any, import_module("pythoncom"))
+            win32_client = cast(Any, import_module("win32com.client"))
         except ImportError as exc:
             raise InventorNotInstalledError("pywin32 is required for Inventor execution.") from exc
 
         pythoncom.CoInitialize()
 
         try:
-            app = win32com.client.GetActiveObject(INVENTOR_PROG_ID)
+            app = win32_client.GetActiveObject(INVENTOR_PROG_ID)
         except Exception:
             try:
-                app = win32com.client.Dispatch(INVENTOR_PROG_ID)
+                app = win32_client.Dispatch(INVENTOR_PROG_ID)
             except Exception as exc:
                 raise InventorConnectionError(
                     "Could not start or connect to Autodesk Inventor through COM."
@@ -64,7 +65,9 @@ class InventorBackend:
         try:
             app.Visible = visible
         except Exception as exc:
-            raise InventorConnectionError("Connected to Inventor, but could not set visibility.") from exc
+            raise InventorConnectionError(
+                "Connected to Inventor, but could not set visibility."
+            ) from exc
 
         return cls(app=app)
 
@@ -85,10 +88,7 @@ class InventorBackend:
         try:
             document = self.app.Documents.Add(PART_DOCUMENT_TYPE, template_arg, True)
             if name:
-                try:
-                    document.DisplayName = name
-                except Exception:
-                    pass
+                _try_set_attribute(document, "DisplayName", name)
             if part_path is not None:
                 document.SaveAs(str(part_path), False)
         except Exception as exc:
@@ -185,12 +185,11 @@ class InventorBackend:
             )
             feature = component_definition.Features.ExtrudeFeatures.Add(extrude_definition)
             if label:
-                try:
-                    feature.Name = label
-                except Exception:
-                    pass
+                _try_set_attribute(feature, "Name", label)
         except Exception as exc:
-            raise PlanExecutionError(f"Could not execute feature step '{label or 'circle'}'.") from exc
+            raise PlanExecutionError(
+                f"Could not execute feature step '{label or 'circle'}'."
+            ) from exc
 
 
 def _required_float(parameters: dict[str, JsonValue], key: str) -> float:
@@ -203,3 +202,11 @@ def _required_float(parameters: dict[str, JsonValue], key: str) -> float:
 def _optional_string(parameters: dict[str, JsonValue], key: str) -> str | None:
     value = parameters.get(key)
     return value if isinstance(value, str) else None
+
+
+def _try_set_attribute(target: Any, name: str, value: object) -> bool:
+    try:
+        setattr(target, name, value)
+    except Exception:
+        return False
+    return True

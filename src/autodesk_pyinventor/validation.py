@@ -38,7 +38,12 @@ def optional_positive_mm(name: str, value: Real | None) -> float | None:
     return positive_mm(name, value)
 
 
-def ensure_outer_greater_than_inner(outer_name: str, outer: float, inner_name: str, inner: float) -> None:
+def ensure_outer_greater_than_inner(
+    outer_name: str,
+    outer: float,
+    inner_name: str,
+    inner: float,
+) -> None:
     """Validate that an outer diameter is larger than an inner diameter."""
 
     if inner >= outer:

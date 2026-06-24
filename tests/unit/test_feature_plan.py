@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 
 import pytest
 
 from autodesk_pyinventor.exceptions import ValidationError
-from autodesk_pyinventor.plan import FeaturePlan, FeatureStep
+from autodesk_pyinventor.plan import FeaturePlan, FeatureStep, JsonValue
 from autodesk_pyinventor.recipes import disk_plan, tube_plan
 
 
@@ -34,5 +35,6 @@ def test_plan_append_tracks_recipe_history() -> None:
 
 
 def test_plan_rejects_non_json_metadata() -> None:
+    bad_metadata = cast(dict[str, JsonValue], {"bad": object()})
     with pytest.raises(ValidationError):
-        FeaturePlan(name="bad", metadata={"bad": object()})  # type: ignore[dict-item]
+        FeaturePlan(name="bad", metadata=bad_metadata)

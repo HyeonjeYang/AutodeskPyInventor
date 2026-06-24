@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -13,7 +14,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_stl_export(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_stl_export(tmp_path: Path) -> None:
     app = api.connect(visible=False)
     part_path = tmp_path / "washer.ipt"
     stl_path = tmp_path / "washer.stl"

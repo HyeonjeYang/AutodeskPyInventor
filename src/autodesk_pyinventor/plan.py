@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Mapping, Sequence, TypeAlias
+from typing import Mapping, Sequence, TypeAlias, cast
 
 from .constants import PUBLIC_UNIT
 from .exceptions import ValidationError
@@ -58,12 +58,13 @@ class FeatureStep:
         raw_parameters = data.get("parameters", {})
         if not isinstance(raw_parameters, dict):
             raise ValidationError("Feature step parameters must be an object.")
+        parameters = cast(dict[str, JsonValue], raw_parameters)
 
         raw_notes = data.get("notes", [])
         if not isinstance(raw_notes, list) or not all(isinstance(note, str) for note in raw_notes):
             raise ValidationError("Feature step notes must be a list of strings.")
 
-        return cls(action=action, parameters=raw_parameters, notes=tuple(raw_notes))
+        return cls(action=action, parameters=parameters, notes=tuple(raw_notes))
 
 
 @dataclass(frozen=True)
@@ -142,16 +143,20 @@ class FeaturePlan:
         raw_metadata = data.get("metadata", {})
         if not isinstance(raw_metadata, dict):
             raise ValidationError("Feature plan metadata must be an object.")
+        metadata = cast(dict[str, JsonValue], raw_metadata)
 
         raw_steps = data.get("steps", [])
         if not isinstance(raw_steps, list):
             raise ValidationError("Feature plan steps must be a list.")
 
-        steps = tuple(FeatureStep.from_dict(step) for step in raw_steps if isinstance(step, dict))
-        if len(steps) != len(raw_steps):
-            raise ValidationError("Feature plan steps must be objects.")
+        step_data: list[Mapping[str, JsonValue]] = []
+        for step in raw_steps:
+            if not isinstance(step, dict):
+                raise ValidationError("Feature plan steps must be objects.")
+            step_data.append(cast(Mapping[str, JsonValue], step))
+        steps = tuple(FeatureStep.from_dict(step) for step in step_data)
 
-        return cls(name=name, units=units, steps=steps, metadata=raw_metadata)
+        return cls(name=name, units=units, steps=steps, metadata=metadata)
 
     @classmethod
     def from_json(cls, value: str) -> "FeaturePlan":

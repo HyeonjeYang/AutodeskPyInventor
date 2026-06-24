@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -13,7 +14,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_inventor_flanged_tube(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_inventor_flanged_tube(tmp_path: Path) -> None:
     app = api.connect(visible=False)
     path = tmp_path / "flanged_tube.ipt"
     part = api.Part.new(app=app, name="flanged_tube", path=path)
