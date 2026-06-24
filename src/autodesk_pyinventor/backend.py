@@ -6,38 +6,38 @@ import os
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 from .constants import (
     CUT_OPERATION,
     INVENTOR_PROG_ID,
     JOIN_OPERATION,
-    PART_DOCUMENT_TYPE,
     POSITIVE_EXTENT_DIRECTION,
     STL_SUFFIX,
     WINDOWS_OS_NAME,
     XY_WORK_PLANE_INDEX,
 )
-from .documents import ensure_parent_dir, normalize_part_path, safe_template_copy
+from .documents import copy_template_to_part, find_standard_part_template, require_part_path
 from .exceptions import (
-    ExportError,
     InventorConnectionError,
+    InventorDocumentError,
+    InventorExportError,
+    InventorGeometryError,
     InventorNotInstalledError,
-    PlanExecutionError,
+    InventorPlanError,
     PlatformNotSupportedError,
 )
-from .plan import FeaturePlan, FeatureStep, JsonValue
+from .plan import ApplyDeferredBores, DeferredCenterBore, FeaturePlan, OuterCylinder
 from .units import mm_to_cm, mm_radius
 from .validation import path_with_suffix
-
-StepHandler = Callable[[Any, FeatureStep], None]
 
 
 @dataclass
 class InventorBackend:
-    """Narrow COM executor for supported FeaturePlan steps."""
+    """Narrow COM executor for supported FeaturePlan operations."""
 
     app: Any
+    constants: Any
 
     @classmethod
     def connect(cls, *, visible: bool = True) -> "InventorBackend":
@@ -48,113 +48,127 @@ class InventorBackend:
             pythoncom = cast(Any, import_module("pythoncom"))
             win32_client = cast(Any, import_module("win32com.client"))
         except ImportError as exc:
-            raise InventorNotInstalledError("pywin32 is required for Inventor execution.") from exc
+            raise InventorNotInstalledError(
+                "pywin32 is not installed. Run: python -m pip install pywin32"
+            ) from exc
 
         pythoncom.CoInitialize()
 
         try:
-            app = win32_client.GetActiveObject(INVENTOR_PROG_ID)
-        except Exception:
-            try:
-                app = win32_client.Dispatch(INVENTOR_PROG_ID)
-            except Exception as exc:
-                raise InventorConnectionError(
-                    "Could not start or connect to Autodesk Inventor through COM."
-                ) from exc
+            app = win32_client.gencache.EnsureDispatch(INVENTOR_PROG_ID)
+        except Exception as exc:
+            raise InventorConnectionError(
+                "Inventor COM connection failed. Make sure Autodesk Inventor is installed. "
+                f"Original COM error: {exc}"
+            ) from exc
+
+        INV = win32_client.constants
 
         try:
             app.Visible = visible
         except Exception as exc:
             raise InventorConnectionError(
-                "Connected to Inventor, but could not set visibility."
+                "Connected to Inventor, but could not set visibility. "
+                f"Original COM error: {exc}"
             ) from exc
 
-        return cls(app=app)
+        return cls(app=app, constants=INV)
 
     def new_part_document(
         self,
         *,
         name: str,
-        path: Path | None = None,
-        template: Path | None = None,
+        path: str | Path | None,
+        template: str | Path | None = None,
     ) -> Any:
-        part_path = normalize_part_path(path)
-        if part_path is not None:
-            ensure_parent_dir(part_path)
-
-        template_path = safe_template_copy(template) if template is not None else None
-        template_arg = str(template_path) if template_path is not None else ""
+        part_path = require_part_path(path)
+        template_path = find_standard_part_template(
+            self.app,
+            template=template,
+            constants=self.constants,
+        )
+        copied_path = copy_template_to_part(template_path, part_path)
 
         try:
-            document = self.app.Documents.Add(PART_DOCUMENT_TYPE, template_arg, True)
-            if name:
-                _try_set_attribute(document, "DisplayName", name)
-            if part_path is not None:
-                document.SaveAs(str(part_path), False)
+            document = self.app.Documents.Open(str(copied_path), True)
         except Exception as exc:
-            raise PlanExecutionError("Could not create an Inventor part document.") from exc
+            raise InventorDocumentError(
+                f"Could not open copied part template at {copied_path}. "
+                "Check that the directory exists and is writable. "
+                f"Original COM error: {exc}"
+            ) from exc
 
+        if not hasattr(document, "ComponentDefinition"):
+            raise InventorDocumentError(
+                f"Opened document at {copied_path}, but it is not an Inventor part document."
+            )
+
+        if name:
+            _try_set_attribute(document, "DisplayName", name)
         return document
 
     def execute_plan(self, document: Any, plan: FeaturePlan) -> None:
-        handlers: dict[str, StepHandler] = {
-            "base_cylinder": self._add_joined_cylinder,
-            "flange_cylinder": self._add_joined_cylinder,
-            "center_bore": self._cut_center_bore,
-        }
-        for step in plan.steps:
-            handler = handlers.get(step.action)
-            if handler is None:
-                raise PlanExecutionError(f"Unsupported feature step: {step.action}")
-            handler(document, step)
+        plan.validate()
+        deferred_bore: DeferredCenterBore | None = None
+        for operation in plan.operations:
+            if isinstance(operation, OuterCylinder):
+                self._add_outer_cylinder(document, operation)
+            elif isinstance(operation, DeferredCenterBore):
+                if deferred_bore is not None:
+                    raise InventorPlanError("Only one deferred center bore is supported.")
+                deferred_bore = operation
+            elif isinstance(operation, ApplyDeferredBores):
+                if deferred_bore is None:
+                    raise InventorPlanError("apply_deferred_bores requires a deferred bore.")
+                self._apply_center_bore_once(document, deferred_bore)
+                deferred_bore = None
 
-    def save_document(self, document: Any, path: Path | None = None) -> None:
+    def save_document(self, document: Any) -> None:
         try:
-            if path is None:
-                document.Save()
-            else:
-                part_path = normalize_part_path(path)
-                if part_path is None:
-                    raise PlanExecutionError("A path is required to save this part.")
-                ensure_parent_dir(part_path)
-                document.SaveAs(str(part_path), False)
+            document.Save()
         except Exception as exc:
-            raise PlanExecutionError("Could not save the Inventor document.") from exc
+            raise InventorDocumentError(
+                f"Could not save the Inventor document. Original COM error: {exc}"
+            ) from exc
 
     def close_document(self, document: Any, *, save_changes: bool = False) -> None:
         try:
             document.Close(save_changes)
         except Exception as exc:
-            raise PlanExecutionError("Could not close the Inventor document.") from exc
+            raise InventorDocumentError(
+                f"Could not close the Inventor document. Original COM error: {exc}"
+            ) from exc
 
-    def export_stl(self, document: Any, path: Path) -> None:
+    def export_stl(self, document: Any, path: str | Path) -> None:
         stl_path = path_with_suffix("path", Path(path), (STL_SUFFIX,))
-        ensure_parent_dir(stl_path)
+        stl_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             document.SaveAs(str(stl_path), True)
         except Exception as exc:
-            raise ExportError("Could not export STL from the Inventor document.") from exc
+            raise InventorExportError(
+                f"Could not export STL to {stl_path}. Original COM error: {exc}"
+            ) from exc
 
-    def _add_joined_cylinder(self, document: Any, step: FeatureStep) -> None:
-        diameter_mm = _required_float(step.parameters, "diameter_mm")
-        depth_mm = _required_float(step.parameters, "depth_mm")
+    def _add_outer_cylinder(self, document: Any, operation: OuterCylinder) -> None:
         self._extrude_circle(
             document=document,
-            diameter_mm=diameter_mm,
-            depth_mm=depth_mm,
-            operation=JOIN_OPERATION,
-            label=_optional_string(step.parameters, "label"),
+            diameter_mm=operation.diameter_mm,
+            z_mm=operation.z_mm,
+            operation=self._constant("kJoinOperation", JOIN_OPERATION),
+            label="outer cylinder",
+            distance_mm=operation.length_mm,
+            through_all_symmetric=False,
         )
 
-    def _cut_center_bore(self, document: Any, step: FeatureStep) -> None:
-        diameter_mm = _required_float(step.parameters, "diameter_mm")
-        depth_mm = _required_float(step.parameters, "depth_mm")
+    def _apply_center_bore_once(self, document: Any, operation: DeferredCenterBore) -> None:
         self._extrude_circle(
             document=document,
-            diameter_mm=diameter_mm,
-            depth_mm=depth_mm,
-            operation=CUT_OPERATION,
-            label=_optional_string(step.parameters, "label"),
+            diameter_mm=operation.diameter_mm,
+            z_mm=0,
+            operation=self._constant("kCutOperation", CUT_OPERATION),
+            label="center bore",
+            distance_mm=None,
+            through_all_symmetric=True,
         )
 
     def _extrude_circle(
@@ -162,46 +176,66 @@ class InventorBackend:
         *,
         document: Any,
         diameter_mm: float,
-        depth_mm: float,
+        z_mm: float,
         operation: int,
-        label: str | None,
+        label: str,
+        distance_mm: float | None,
+        through_all_symmetric: bool,
     ) -> None:
         try:
             component_definition = document.ComponentDefinition
-            sketch = component_definition.Sketches.Add(
-                component_definition.WorkPlanes.Item(XY_WORK_PLANE_INDEX)
-            )
+            work_plane = self._work_plane_for_z(component_definition, z_mm)
+            sketch = component_definition.Sketches.Add(work_plane)
             transient_geometry = self.app.TransientGeometry
             center = transient_geometry.CreatePoint2d(0, 0)
             sketch.SketchCircles.AddByCenterRadius(center, mm_to_cm(mm_radius(diameter_mm)))
             profile = sketch.Profiles.AddForSolid()
             extrude_definition = (
                 component_definition.Features.ExtrudeFeatures.CreateExtrudeDefinition(
-                    profile, operation
+                    profile,
+                    operation,
                 )
             )
-            extrude_definition.SetDistanceExtent(
-                mm_to_cm(depth_mm), POSITIVE_EXTENT_DIRECTION
-            )
+            if through_all_symmetric:
+                extrude_definition.SetThroughAllExtent(
+                    self._constant("kSymmetricExtentDirection", POSITIVE_EXTENT_DIRECTION)
+                )
+            elif distance_mm is not None:
+                extrude_definition.SetDistanceExtent(
+                    mm_to_cm(distance_mm),
+                    self._constant("kPositiveExtentDirection", POSITIVE_EXTENT_DIRECTION),
+                )
+            else:
+                raise InventorPlanError(
+                    "distance_mm is required unless through_all_symmetric is set."
+                )
+
             feature = component_definition.Features.ExtrudeFeatures.Add(extrude_definition)
-            if label:
-                _try_set_attribute(feature, "Name", label)
+            _try_set_attribute(feature, "Name", label)
         except Exception as exc:
-            raise PlanExecutionError(
-                f"Could not execute feature step '{label or 'circle'}'."
+            raise InventorGeometryError(
+                f"Could not create {label} with diameter {diameter_mm:g} mm. "
+                f"Original COM error: {exc}"
             ) from exc
 
+    def _work_plane_for_z(self, component_definition: Any, z_mm: float) -> Any:
+        work_planes = component_definition.WorkPlanes
+        xy_plane = work_planes.Item(XY_WORK_PLANE_INDEX)
+        if abs(z_mm) < 1e-9:
+            return xy_plane
 
-def _required_float(parameters: dict[str, JsonValue], key: str) -> float:
-    value = parameters.get(key)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise PlanExecutionError(f"Feature step parameter '{key}' must be numeric.")
-    return float(value)
+        try:
+            offset_plane = work_planes.AddByPlaneAndOffset(xy_plane, mm_to_cm(z_mm))
+            _try_set_attribute(offset_plane, "Visible", False)
+            return offset_plane
+        except Exception as exc:
+            raise InventorGeometryError(
+                f"Could not create offset work plane at z={z_mm:g} mm. "
+                f"Original COM error: {exc}"
+            ) from exc
 
-
-def _optional_string(parameters: dict[str, JsonValue], key: str) -> str | None:
-    value = parameters.get(key)
-    return value if isinstance(value, str) else None
+    def _constant(self, name: str, fallback: int) -> int:
+        return int(getattr(self.constants, name, fallback))
 
 
 def _try_set_attribute(target: Any, name: str, value: object) -> bool:

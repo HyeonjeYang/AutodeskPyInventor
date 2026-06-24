@@ -14,6 +14,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.inventor
 def test_stl_export(tmp_path: Path) -> None:
     app = api.connect(visible=False)
     part_path = tmp_path / "washer.ipt"

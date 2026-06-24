@@ -4,7 +4,10 @@ from autodesk_pyinventor.units import cm_to_mm, mm_diameter, mm_radius, mm_to_cm
 
 
 def test_mm_cm_conversions() -> None:
+    assert mm_to_cm(0) == 0
     assert mm_to_cm(10) == 1
+    assert mm_to_cm(63.5) == 6.35
+    assert mm_to_cm(-10) == -1
     assert cm_to_mm(1.5) == 15
 
 

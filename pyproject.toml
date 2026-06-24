@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "autodesk-pyinventor"
 version = "0.1.0"
-description = "Unofficial Windows-only Python-first automation helpers for Autodesk Inventor."
+description = "Reliability-first Python automation layer for Autodesk Inventor COM API"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -22,13 +22,14 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering",
 ]
-dependencies = ["pywin32>=306; platform_system == 'Windows'"]
+dependencies = ["pywin32; platform_system == 'Windows'"]
 
 [project.optional-dependencies]
 dev = [
   "mypy>=1.8",
   "pytest>=8",
   "ruff>=0.5",
+  "types-pywin32",
 ]
 
 [project.scripts]
@@ -55,3 +56,6 @@ files = ["src", "tests/unit"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+  "inventor: requires Windows and local Autodesk Inventor installation",
+]

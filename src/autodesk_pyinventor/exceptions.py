@@ -19,13 +19,26 @@ class InventorConnectionError(AutodeskPyInventorError):
     """Raised when the COM connection to Inventor fails."""
 
 
-class ValidationError(AutodeskPyInventorError, ValueError):
+class InventorDocumentError(AutodeskPyInventorError):
+    """Raised when an Inventor document cannot be created, opened, saved, or closed."""
+
+
+class InventorGeometryError(AutodeskPyInventorError):
+    """Raised when Inventor cannot create a planned geometry operation."""
+
+
+class InventorValidationError(AutodeskPyInventorError, ValueError):
     """Raised when recipe inputs are invalid."""
 
 
-class PlanExecutionError(AutodeskPyInventorError):
-    """Raised when a FeaturePlan cannot be executed by the backend."""
+class InventorPlanError(AutodeskPyInventorError):
+    """Raised when a FeaturePlan is invalid or cannot be executed."""
 
 
-class ExportError(AutodeskPyInventorError):
+class InventorExportError(AutodeskPyInventorError):
     """Raised when an export operation fails."""
+
+
+ValidationError = InventorValidationError
+PlanExecutionError = InventorPlanError
+ExportError = InventorExportError

@@ -4,171 +4,104 @@ from __future__ import annotations
 
 from numbers import Real
 
-from .plan import FeaturePlan
+from .plan import ApplyDeferredBores, DeferredCenterBore, FeaturePlan, OuterCylinder
 from .validation import (
-    ensure_not_greater_than,
+    ensure_at_least,
     ensure_outer_greater_than_inner,
-    optional_positive_mm,
+    non_negative_mm,
+    numeric_mm,
     positive_mm,
 )
 
 
 def disk_plan(
     *,
-    od: Real,
-    thickness: Real,
-    id: Real | None = None,
     name: str = "disk",
+    od: Real,
+    id: Real = 0,
+    thickness: Real = 1,
 ) -> FeaturePlan:
-    """Plan a solid disk, optionally with a deferred center bore."""
+    """Plan a disk or washer as one outer solid plus one optional final bore."""
 
     outer_diameter = positive_mm("od", od)
-    inner_diameter = optional_positive_mm("id", id)
+    inner_diameter = non_negative_mm("id", id)
     depth = positive_mm("thickness", thickness)
-    if inner_diameter is not None:
+    if inner_diameter > 0:
         ensure_outer_greater_than_inner("od", outer_diameter, "id", inner_diameter)
 
-    plan = FeaturePlan(
-        name=name,
-        metadata={
-            "recipe": "disk",
-            "od_mm": outer_diameter,
-            "id_mm": inner_diameter,
-            "thickness_mm": depth,
-        },
-    ).add_step(
-        "base_cylinder",
-        {
-            "diameter_mm": outer_diameter,
-            "depth_mm": depth,
-            "label": "outer disk",
-        },
-    )
-
-    if inner_diameter is not None:
-        plan = plan.add_step(
-            "center_bore",
-            {
-                "diameter_mm": inner_diameter,
-                "depth_mm": depth,
-                "deferred": True,
-                "label": "center bore",
-            },
-            notes=("Bore is deferred until after the base solid exists.",),
+    operations = [OuterCylinder(diameter_mm=outer_diameter, z_mm=0, length_mm=depth)]
+    if inner_diameter > 0:
+        operations.extend(
+            [
+                DeferredCenterBore(diameter_mm=inner_diameter),
+                ApplyDeferredBores(),
+            ]
         )
+    return FeaturePlan(name=name, operations=operations)
 
-    return plan
 
-
-def washer_plan(*, od: Real, id: Real, thickness: Real, name: str = "washer") -> FeaturePlan:
+def washer_plan(*, name: str = "washer", od: Real, id: Real, thickness: Real) -> FeaturePlan:
     """Plan a washer as a disk with a required center bore."""
 
-    plan = disk_plan(od=od, id=id, thickness=thickness, name=name)
-    return FeaturePlan(
-        name=plan.name,
-        steps=plan.steps,
-        metadata={**plan.metadata, "recipe": "washer"},
-    )
+    return disk_plan(name=name, od=od, id=id, thickness=thickness)
 
 
-def tube_plan(*, od: Real, id: Real, length: Real, name: str = "tube") -> FeaturePlan:
-    """Plan a straight tube with a deferred through bore."""
+def tube_plan(*, name: str = "tube", od: Real, id: Real, length: Real) -> FeaturePlan:
+    """Plan a straight tube with the through bore applied once at the end."""
 
     outer_diameter = positive_mm("od", od)
-    inner_diameter = positive_mm("id", id)
+    inner_diameter = non_negative_mm("id", id)
     tube_length = positive_mm("length", length)
-    ensure_outer_greater_than_inner("od", outer_diameter, "id", inner_diameter)
+    if inner_diameter > 0:
+        ensure_outer_greater_than_inner("od", outer_diameter, "id", inner_diameter)
 
-    return (
-        FeaturePlan(
-            name=name,
-            metadata={
-                "recipe": "tube",
-                "od_mm": outer_diameter,
-                "id_mm": inner_diameter,
-                "length_mm": tube_length,
-            },
+    operations = [OuterCylinder(diameter_mm=outer_diameter, z_mm=0, length_mm=tube_length)]
+    if inner_diameter > 0:
+        operations.extend(
+            [
+                DeferredCenterBore(diameter_mm=inner_diameter),
+                ApplyDeferredBores(),
+            ]
         )
-        .add_step(
-            "base_cylinder",
-            {
-                "diameter_mm": outer_diameter,
-                "depth_mm": tube_length,
-                "label": "outer tube",
-            },
-        )
-        .add_step(
-            "center_bore",
-            {
-                "diameter_mm": inner_diameter,
-                "depth_mm": tube_length,
-                "deferred": True,
-                "label": "tube bore",
-            },
-            notes=("Through bore is executed after the outer cylinder.",),
-        )
-    )
+    return FeaturePlan(name=name, operations=operations)
 
 
 def flanged_tube_plan(
     *,
-    od: Real,
-    id: Real,
-    length: Real,
+    name: str = "flanged_tube",
+    body_od: Real,
+    body_id: Real,
+    body_length: Real,
     flange_od: Real,
     flange_thickness: Real,
-    name: str = "flanged_tube",
+    flange_z: Real = 0,
 ) -> FeaturePlan:
-    """Plan a tube with a single flange at the start face."""
+    """Plan a flanged tube by joining all outer solids before one final bore."""
 
-    outer_diameter = positive_mm("od", od)
-    inner_diameter = positive_mm("id", id)
-    tube_length = positive_mm("length", length)
+    body_outer = positive_mm("body_od", body_od)
+    body_inner = non_negative_mm("body_id", body_id)
+    length = positive_mm("body_length", body_length)
     flange_diameter = positive_mm("flange_od", flange_od)
     flange_depth = positive_mm("flange_thickness", flange_thickness)
+    flange_position = numeric_mm("flange_z", flange_z)
 
-    ensure_outer_greater_than_inner("od", outer_diameter, "id", inner_diameter)
-    ensure_outer_greater_than_inner("flange_od", flange_diameter, "od", outer_diameter)
-    ensure_not_greater_than("flange_thickness", flange_depth, "length", tube_length)
+    if body_inner > 0:
+        ensure_outer_greater_than_inner("body_od", body_outer, "body_id", body_inner)
+    ensure_at_least("flange_od", flange_diameter, "body_od", body_outer)
 
-    return (
-        FeaturePlan(
-            name=name,
-            metadata={
-                "recipe": "flanged_tube",
-                "od_mm": outer_diameter,
-                "id_mm": inner_diameter,
-                "length_mm": tube_length,
-                "flange_od_mm": flange_diameter,
-                "flange_thickness_mm": flange_depth,
-                "flange_position": "start",
-            },
+    operations = [
+        OuterCylinder(diameter_mm=body_outer, z_mm=0, length_mm=length),
+        OuterCylinder(
+            diameter_mm=flange_diameter,
+            z_mm=flange_position,
+            length_mm=flange_depth,
+        ),
+    ]
+    if body_inner > 0:
+        operations.extend(
+            [
+                DeferredCenterBore(diameter_mm=body_inner),
+                ApplyDeferredBores(),
+            ]
         )
-        .add_step(
-            "base_cylinder",
-            {
-                "diameter_mm": outer_diameter,
-                "depth_mm": tube_length,
-                "label": "outer tube",
-            },
-        )
-        .add_step(
-            "flange_cylinder",
-            {
-                "diameter_mm": flange_diameter,
-                "depth_mm": flange_depth,
-                "label": "start flange",
-            },
-            notes=("Flange is joined before the bore is cut.",),
-        )
-        .add_step(
-            "center_bore",
-            {
-                "diameter_mm": inner_diameter,
-                "depth_mm": tube_length,
-                "deferred": True,
-                "label": "tube and flange bore",
-            },
-            notes=("Bore is intentionally last to avoid profile ambiguity.",),
-        )
-    )
+    return FeaturePlan(name=name, operations=operations)

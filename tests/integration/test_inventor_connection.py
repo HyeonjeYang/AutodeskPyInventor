@@ -13,6 +13,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.inventor
 def test_inventor_connection() -> None:
     app = api.connect(visible=False)
 

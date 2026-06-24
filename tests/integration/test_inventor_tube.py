@@ -14,6 +14,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.inventor
 def test_inventor_tube(tmp_path: Path) -> None:
     app = api.connect(visible=False)
     path = tmp_path / "tube.ipt"

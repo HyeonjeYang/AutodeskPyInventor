@@ -26,8 +26,8 @@ class InventorApp:
         self,
         *,
         name: str,
-        path: Path | None = None,
-        template: Path | None = None,
+        path: str | Path | None,
+        template: str | Path | None = None,
     ) -> Any:
         return self.backend.new_part_document(name=name, path=path, template=template)
 
