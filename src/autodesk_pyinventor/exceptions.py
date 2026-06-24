@@ -1,0 +1,2 @@
+"""Package-specific exceptions."""
+

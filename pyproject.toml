@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autodesk-pyinventor"
+version = "0.1.0"
+description = "Unofficial Windows-only Python-first automation helpers for Autodesk Inventor."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "HyeonjeYang" }]
+keywords = ["autodesk", "inventor", "cad", "com", "pywin32"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = ["pywin32>=306; platform_system == 'Windows'"]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.8",
+  "pytest>=8",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+autodesk-pyinventor = "autodesk_pyinventor.cli:main"
+
+[project.urls]
+Repository = "https://github.com/HyeonjeYang/AutodeskPyInventor"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src", "tests/unit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

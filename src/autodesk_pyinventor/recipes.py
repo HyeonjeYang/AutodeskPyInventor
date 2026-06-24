@@ -1,0 +1,2 @@
+"""Manufacturing-oriented geometry recipes."""
+
