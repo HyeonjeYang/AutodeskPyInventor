@@ -9,3 +9,19 @@ build/
 dist/
 htmlcov/
 .coverage
+
+# Generated Autodesk Inventor and interchange artifacts
+generated/
+OldVersions/
+*.ipt
+*.iam
+*.ipn
+*.idw
+*.stl
+*.step
+*.stp
+*.iges
+*.igs
+*.sat
+*.dwg
+*.dxf
