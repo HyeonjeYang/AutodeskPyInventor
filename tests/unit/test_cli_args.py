@@ -89,6 +89,27 @@ def test_cli_flanged_tube_dry_run_defers_bore_once(capsys: pytest.CaptureFixture
     assert captured.out.count("apply_center_bore_once") == 1
 
 
+def test_cli_astro_controller_dry_run_contains_two_documents(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(["astro-controller-enclosure", "--dry-run", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert set(payload["documents"]) == {"base", "lid"}
+    assert payload["parameters"]["wall"] == 2
+    assert payload["documents"]["base"]["operations"][0]["type"] == "rectangle_extrude"
+
+
+def test_cli_astro_controller_requires_two_outputs(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["astro-controller-enclosure"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "--base-output and --lid-output" in captured.err
+
+
 def test_cli_requires_output_for_real_execution(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main(["disk", "--od", "80", "--thickness", "8"])
 

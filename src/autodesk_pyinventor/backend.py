@@ -19,7 +19,15 @@ from .exceptions import (
     InventorPlanError,
     PlatformNotSupportedError,
 )
-from .plan import ApplyDeferredBores, DeferredCenterBore, FeaturePlan, OuterCylinder
+from .plan import (
+    ApplyDeferredBores,
+    CircleExtrude,
+    DeferredCenterBore,
+    FeaturePlan,
+    OuterCylinder,
+    RectangleExtrude,
+    Shell,
+)
 from .units import mm_to_cm, mm_radius
 from .validation import path_with_suffix
 
@@ -103,10 +111,13 @@ class InventorBackend:
 
     def execute_plan(self, document: Any, plan: FeaturePlan) -> None:
         plan.validate()
+        self._add_user_parameters(document, plan.parameters)
         deferred_bore: DeferredCenterBore | None = None
-        for operation in plan.operations:
+        bindings = {binding.operation_index: binding for binding in plan.parameter_bindings}
+        for operation_index, operation in enumerate(plan.operations):
+            feature: Any | None = None
             if isinstance(operation, OuterCylinder):
-                self._add_outer_cylinder(document, operation)
+                feature = self._add_outer_cylinder(document, operation)
             elif isinstance(operation, DeferredCenterBore):
                 if deferred_bore is not None:
                     raise InventorPlanError("Only one deferred center bore is supported.")
@@ -114,8 +125,52 @@ class InventorBackend:
             elif isinstance(operation, ApplyDeferredBores):
                 if deferred_bore is None:
                     raise InventorPlanError("apply_deferred_bores requires a deferred bore.")
-                self._apply_center_bore_once(document, deferred_bore)
+                feature = self._apply_center_bore_once(document, deferred_bore)
                 deferred_bore = None
+            elif isinstance(operation, RectangleExtrude):
+                feature = self._add_rectangle_extrude(document, operation)
+            elif isinstance(operation, CircleExtrude):
+                feature = self._add_circle_extrude(document, operation)
+            elif isinstance(operation, Shell):
+                feature = self._add_shell(document, operation)
+            binding = bindings.get(operation_index)
+            if binding is not None:
+                self._bind_feature_parameter(feature, binding.expression)
+
+    def _add_user_parameters(self, document: Any, parameters: dict[str, float]) -> None:
+        if not parameters:
+            return
+        try:
+            user_parameters = document.ComponentDefinition.Parameters.UserParameters
+            for name, value in parameters.items():
+                expression = f"{value:g} mm"
+                try:
+                    user_parameters.Item(name).Expression = expression
+                except Exception:
+                    user_parameters.AddByExpression(name, expression, "mm")
+        except Exception as exc:
+            raise InventorGeometryError(
+                f"Could not create Inventor UserParameters. Original COM error: {exc}"
+            ) from exc
+
+    def _bind_feature_parameter(self, feature: Any | None, expression: str) -> None:
+        if feature is None:
+            raise InventorGeometryError(
+                f"Could not bind feature extent to parameter expression {expression!r}."
+            )
+        for getter in (
+            lambda: feature.Extent.Distance,
+            lambda: feature.Definition.Extent.Distance,
+            lambda: feature.Definition.Distance,
+        ):
+            try:
+                getter().Expression = expression
+                return
+            except Exception:
+                continue
+        raise InventorGeometryError(
+            f"Inventor did not expose a distance parameter for expression {expression!r}."
+        )
 
     def save_document(self, document: Any) -> None:
         try:
@@ -143,26 +198,85 @@ class InventorBackend:
                 f"Could not export STL to {stl_path}. Original COM error: {exc}"
             ) from exc
 
-    def _add_outer_cylinder(self, document: Any, operation: OuterCylinder) -> None:
-        self._extrude_circle(
+    def _add_outer_cylinder(self, document: Any, operation: OuterCylinder) -> Any:
+        return self._extrude_circle(
             document=document,
             diameter_mm=operation.diameter_mm,
+            x_mm=0,
+            y_mm=0,
             z_mm=operation.z_mm,
+            plane="XY",
             operation=self._constant("kJoinOperation"),
             label="outer cylinder",
             distance_mm=operation.length_mm,
+            direction="positive",
             through_all_symmetric=False,
         )
 
-    def _apply_center_bore_once(self, document: Any, operation: DeferredCenterBore) -> None:
-        self._extrude_circle(
+    def _apply_center_bore_once(self, document: Any, operation: DeferredCenterBore) -> Any:
+        return self._extrude_circle(
             document=document,
             diameter_mm=operation.diameter_mm,
+            x_mm=0,
+            y_mm=0,
             z_mm=0,
+            plane="XY",
             operation=self._constant("kCutOperation"),
             label="center bore",
             distance_mm=None,
+            direction="positive",
             through_all_symmetric=True,
+        )
+
+    def _add_circle_extrude(self, document: Any, operation: CircleExtrude) -> Any:
+        return self._extrude_circle(
+            document=document,
+            diameter_mm=operation.diameter_mm,
+            x_mm=operation.x_mm,
+            y_mm=operation.y_mm,
+            z_mm=operation.z_mm,
+            plane=operation.plane,
+            operation=self._constant(
+                "kJoinOperation" if operation.operation == "join" else "kCutOperation"
+            ),
+            label=f"circle {operation.operation}",
+            distance_mm=operation.length_mm,
+            direction=operation.direction,
+            through_all_symmetric=False,
+        )
+
+    def _add_rectangle_extrude(self, document: Any, operation: RectangleExtrude) -> Any:
+        return self._extrude_rectangle(
+            document=document,
+            width_mm=operation.width_mm,
+            height_mm=operation.height_mm,
+            x_mm=operation.x_mm,
+            y_mm=operation.y_mm,
+            z_mm=operation.z_mm,
+            plane=operation.plane,
+            operation=self._constant(
+                "kJoinOperation" if operation.operation == "join" else "kCutOperation"
+            ),
+            label=f"rectangle {operation.operation}",
+            distance_mm=operation.length_mm,
+            direction=operation.direction,
+        )
+
+    def _add_shell(self, document: Any, operation: Shell) -> Any:
+        # A controlled inner-box cut is more reliable across Inventor versions than
+        # ShellFeatures, while producing the same open-top tray geometry.
+        return self._extrude_rectangle(
+            document=document,
+            width_mm=operation.outer_width_mm - 2 * operation.thickness_mm,
+            height_mm=operation.outer_depth_mm - 2 * operation.thickness_mm,
+            x_mm=operation.outer_width_mm / 2,
+            y_mm=operation.outer_depth_mm / 2,
+            z_mm=operation.thickness_mm,
+            plane="XY",
+            operation=self._constant("kCutOperation"),
+            label="shell inner cavity",
+            distance_mm=operation.outer_height_mm - operation.thickness_mm,
+            direction="positive",
         )
 
     def _extrude_circle(
@@ -170,18 +284,31 @@ class InventorBackend:
         *,
         document: Any,
         diameter_mm: float,
+        x_mm: float,
+        y_mm: float,
         z_mm: float,
+        plane: str,
         operation: int,
         label: str,
         distance_mm: float | None,
+        direction: str,
         through_all_symmetric: bool,
-    ) -> None:
+    ) -> Any:
         try:
             component_definition = document.ComponentDefinition
-            work_plane = self._work_plane_for_z(component_definition, z_mm)
+            center_u_mm, center_v_mm, offset_mm = _plane_coordinates(
+                plane,
+                x_mm=x_mm,
+                y_mm=y_mm,
+                z_mm=z_mm,
+            )
+            work_plane = self._work_plane_for_plane(component_definition, plane, offset_mm)
             sketch = component_definition.Sketches.Add(work_plane)
             transient_geometry = self.app.TransientGeometry
-            center = transient_geometry.CreatePoint2d(0, 0)
+            center = transient_geometry.CreatePoint2d(
+                mm_to_cm(center_u_mm),
+                mm_to_cm(center_v_mm),
+            )
             sketch.SketchCircles.AddByCenterRadius(center, mm_to_cm(mm_radius(diameter_mm)))
             profile = sketch.Profiles.AddForSolid()
             extrude_definition = (
@@ -195,7 +322,7 @@ class InventorBackend:
             elif distance_mm is not None:
                 extrude_definition.SetDistanceExtent(
                     mm_to_cm(distance_mm),
-                    self._constant("kPositiveExtentDirection"),
+                    self._extent_direction(direction),
                 )
             else:
                 raise InventorPlanError(
@@ -204,6 +331,7 @@ class InventorBackend:
 
             feature = component_definition.Features.ExtrudeFeatures.Add(extrude_definition)
             _try_set_attribute(feature, "Name", label)
+            return feature
         except InventorGeometryError:
             raise
         except Exception as exc:
@@ -212,19 +340,88 @@ class InventorBackend:
                 f"Original COM error: {exc}"
             ) from exc
 
-    def _work_plane_for_z(self, component_definition: Any, z_mm: float) -> Any:
-        work_planes = component_definition.WorkPlanes
-        xy_plane = work_planes.Item(XY_WORK_PLANE_INDEX)
-        if abs(z_mm) < 1e-9:
-            return xy_plane
-
+    def _extrude_rectangle(
+        self,
+        *,
+        document: Any,
+        width_mm: float,
+        height_mm: float,
+        x_mm: float,
+        y_mm: float,
+        z_mm: float,
+        plane: str,
+        operation: int,
+        label: str,
+        distance_mm: float,
+        direction: str,
+    ) -> Any:
         try:
-            offset_plane = work_planes.AddByPlaneAndOffset(xy_plane, mm_to_cm(z_mm))
+            component_definition = document.ComponentDefinition
+            center_u_mm, center_v_mm, offset_mm = _plane_coordinates(
+                plane,
+                x_mm=x_mm,
+                y_mm=y_mm,
+                z_mm=z_mm,
+            )
+            work_plane = self._work_plane_for_plane(component_definition, plane, offset_mm)
+            sketch = component_definition.Sketches.Add(work_plane)
+            transient_geometry = self.app.TransientGeometry
+            corner_a = transient_geometry.CreatePoint2d(
+                mm_to_cm(center_u_mm - width_mm / 2),
+                mm_to_cm(center_v_mm - height_mm / 2),
+            )
+            corner_b = transient_geometry.CreatePoint2d(
+                mm_to_cm(center_u_mm + width_mm / 2),
+                mm_to_cm(center_v_mm + height_mm / 2),
+            )
+            sketch.SketchLines.AddAsTwoPointRectangle(corner_a, corner_b)
+            profile = sketch.Profiles.AddForSolid()
+            extrude_definition = (
+                component_definition.Features.ExtrudeFeatures.CreateExtrudeDefinition(
+                    profile,
+                    operation,
+                )
+            )
+            extrude_definition.SetDistanceExtent(
+                mm_to_cm(distance_mm),
+                self._extent_direction(direction),
+            )
+            feature = component_definition.Features.ExtrudeFeatures.Add(extrude_definition)
+            _try_set_attribute(feature, "Name", label)
+            return feature
+        except InventorGeometryError:
+            raise
+        except Exception as exc:
+            raise InventorGeometryError(
+                f"Could not create {label} with rectangle {width_mm:g} x {height_mm:g} mm. "
+                f"Original COM error: {exc}"
+            ) from exc
+
+    def _extent_direction(self, direction: str) -> int:
+        if direction == "positive":
+            return self._constant("kPositiveExtentDirection")
+        if direction == "negative":
+            return self._constant("kNegativeExtentDirection")
+        raise InventorPlanError(f"Unsupported extent direction={direction!r}.")
+
+    def _work_plane_for_z(self, component_definition: Any, z_mm: float) -> Any:
+        return self._work_plane_for_plane(component_definition, "XY", z_mm)
+
+    def _work_plane_for_plane(self, component_definition: Any, plane: str, offset_mm: float) -> Any:
+        plane_indexes = {"YZ": 1, "XZ": 2, "XY": XY_WORK_PLANE_INDEX}
+        if plane not in plane_indexes:
+            raise InventorPlanError(f"Unsupported work plane={plane!r}.")
+        work_planes = component_definition.WorkPlanes
+        base_plane = work_planes.Item(plane_indexes[plane])
+        if abs(offset_mm) < 1e-9:
+            return base_plane
+        try:
+            offset_plane = work_planes.AddByPlaneAndOffset(base_plane, mm_to_cm(offset_mm))
             _try_set_attribute(offset_plane, "Visible", False)
             return offset_plane
         except Exception as exc:
             raise InventorGeometryError(
-                f"Could not create offset work plane at z={z_mm:g} mm. "
+                f"Could not create offset work plane at {plane} offset={offset_mm:g} mm. "
                 f"Original COM error: {exc}"
             ) from exc
 
@@ -252,3 +449,19 @@ def _cast_to_part_document(document: Any) -> Any:
         return win32_client.CastTo(document, "PartDocument")
     except Exception:
         return document
+
+
+def _plane_coordinates(
+    plane: str,
+    *,
+    x_mm: float,
+    y_mm: float,
+    z_mm: float,
+) -> tuple[float, float, float]:
+    if plane == "XY":
+        return x_mm, y_mm, z_mm
+    if plane == "YZ":
+        return y_mm, z_mm, x_mm
+    if plane == "XZ":
+        return x_mm, z_mm, y_mm
+    raise InventorPlanError(f"Unsupported work plane={plane!r}.")

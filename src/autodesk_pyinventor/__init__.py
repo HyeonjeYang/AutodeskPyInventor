@@ -15,13 +15,26 @@ from .exceptions import (
     ValidationError,
 )
 from .part import Part
-from .plan import ApplyDeferredBores, DeferredCenterBore, FeaturePlan, Operation, OuterCylinder
-from .recipes import disk_plan, flanged_tube_plan, tube_plan, washer_plan
+from .plan import (
+    ApplyDeferredBores,
+    CircleExtrude,
+    DeferredCenterBore,
+    EnclosurePlan,
+    FeaturePlan,
+    Operation,
+    OuterCylinder,
+    RectangleExtrude,
+    Shell,
+)
+from .recipes import astro_controller_enclosure_plan, disk_plan, flanged_tube_plan, tube_plan, washer_plan
 
 __all__ = [
     "AutodeskPyInventorError",
     "ApplyDeferredBores",
+    "astro_controller_enclosure_plan",
+    "CircleExtrude",
     "DeferredCenterBore",
+    "EnclosurePlan",
     "ExportError",
     "FeaturePlan",
     "InventorApp",
@@ -37,6 +50,8 @@ __all__ = [
     "PlanExecutionError",
     "PlatformNotSupportedError",
     "ValidationError",
+    "RectangleExtrude",
+    "Shell",
     "connect",
     "disk_plan",
     "flanged_tube_plan",

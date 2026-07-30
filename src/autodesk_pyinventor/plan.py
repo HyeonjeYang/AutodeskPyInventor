@@ -13,6 +13,10 @@ from .validation import non_negative_mm, numeric_mm, positive_mm
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+PlaneName: TypeAlias = Literal["XY", "YZ", "XZ"]
+FeatureOperation: TypeAlias = Literal["join", "cut"]
+ExtentDirection: TypeAlias = Literal["positive", "negative"]
+ParameterTarget: TypeAlias = Literal["extent"]
 
 
 def _clean_number(value: float) -> int | float:
@@ -80,7 +84,237 @@ class ApplyDeferredBores:
         return {"type": "apply_deferred_bores"}
 
 
-Operation: TypeAlias = OuterCylinder | DeferredCenterBore | ApplyDeferredBores
+@dataclass(frozen=True)
+class RectangleExtrude:
+    """Extrude a centered rectangle on an XY, YZ, or XZ work plane."""
+
+    width_mm: float
+    height_mm: float
+    x_mm: float
+    y_mm: float
+    z_mm: float
+    length_mm: float
+    operation: FeatureOperation = "join"
+    plane: PlaneName = "XY"
+    direction: ExtentDirection = "positive"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "width_mm", positive_mm("width_mm", self.width_mm))
+        object.__setattr__(self, "height_mm", positive_mm("height_mm", self.height_mm))
+        object.__setattr__(self, "x_mm", numeric_mm("x_mm", self.x_mm))
+        object.__setattr__(self, "y_mm", numeric_mm("y_mm", self.y_mm))
+        object.__setattr__(self, "z_mm", numeric_mm("z_mm", self.z_mm))
+        object.__setattr__(self, "length_mm", positive_mm("length_mm", self.length_mm))
+        if self.operation not in ("join", "cut"):
+            raise InventorPlanError(f"operation={self.operation!r} must be 'join' or 'cut'.")
+        if self.plane not in ("XY", "YZ", "XZ"):
+            raise InventorPlanError(f"plane={self.plane!r} is unsupported.")
+        if self.direction not in ("positive", "negative"):
+            raise InventorPlanError(f"direction={self.direction!r} is unsupported.")
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "type": "rectangle_extrude",
+            "width": _clean_number(self.width_mm),
+            "height": _clean_number(self.height_mm),
+            "x": _clean_number(self.x_mm),
+            "y": _clean_number(self.y_mm),
+            "z": _clean_number(self.z_mm),
+            "length": _clean_number(self.length_mm),
+            "operation": self.operation,
+            "plane": self.plane,
+            "direction": self.direction,
+        }
+
+
+@dataclass(frozen=True)
+class CircleExtrude:
+    """Extrude a circle on an XY, YZ, or XZ work plane."""
+
+    diameter_mm: float
+    x_mm: float
+    y_mm: float
+    z_mm: float
+    length_mm: float
+    operation: FeatureOperation = "cut"
+    plane: PlaneName = "XY"
+    direction: ExtentDirection = "positive"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "diameter_mm", positive_mm("diameter_mm", self.diameter_mm))
+        object.__setattr__(self, "x_mm", numeric_mm("x_mm", self.x_mm))
+        object.__setattr__(self, "y_mm", numeric_mm("y_mm", self.y_mm))
+        object.__setattr__(self, "z_mm", numeric_mm("z_mm", self.z_mm))
+        object.__setattr__(self, "length_mm", positive_mm("length_mm", self.length_mm))
+        if self.operation not in ("join", "cut"):
+            raise InventorPlanError(f"operation={self.operation!r} must be 'join' or 'cut'.")
+        if self.plane not in ("XY", "YZ", "XZ"):
+            raise InventorPlanError(f"plane={self.plane!r} is unsupported.")
+        if self.direction not in ("positive", "negative"):
+            raise InventorPlanError(f"direction={self.direction!r} is unsupported.")
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "type": "circle_extrude",
+            "diameter": _clean_number(self.diameter_mm),
+            "x": _clean_number(self.x_mm),
+            "y": _clean_number(self.y_mm),
+            "z": _clean_number(self.z_mm),
+            "length": _clean_number(self.length_mm),
+            "operation": self.operation,
+            "plane": self.plane,
+            "direction": self.direction,
+        }
+
+
+@dataclass(frozen=True)
+class Shell:
+    """Create a top-open tray by cutting the inner cavity from an outer box."""
+
+    outer_width_mm: float
+    outer_depth_mm: float
+    outer_height_mm: float
+    thickness_mm: float
+    open_face: Literal["top"] = "top"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "outer_width_mm", positive_mm("outer_width_mm", self.outer_width_mm))
+        object.__setattr__(self, "outer_depth_mm", positive_mm("outer_depth_mm", self.outer_depth_mm))
+        object.__setattr__(self, "outer_height_mm", positive_mm("outer_height_mm", self.outer_height_mm))
+        object.__setattr__(self, "thickness_mm", positive_mm("thickness_mm", self.thickness_mm))
+        if self.open_face != "top":
+            raise InventorPlanError(f"open_face={self.open_face!r} is unsupported.")
+        if self.thickness_mm * 2 >= min(self.outer_width_mm, self.outer_depth_mm):
+            raise InventorValidationError("Shell thickness leaves no positive inner footprint.")
+        if self.thickness_mm >= self.outer_height_mm:
+            raise InventorValidationError("Shell thickness must be smaller than outer height.")
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "type": "shell",
+            "outer_width": _clean_number(self.outer_width_mm),
+            "outer_depth": _clean_number(self.outer_depth_mm),
+            "outer_height": _clean_number(self.outer_height_mm),
+            "thickness": _clean_number(self.thickness_mm),
+            "open_face": self.open_face,
+        }
+
+
+@dataclass(frozen=True)
+class ParameterBinding:
+    """Bind one generated feature property to an Inventor expression."""
+
+    operation_index: int
+    target: ParameterTarget
+    expression: str
+
+    def __post_init__(self) -> None:
+        if self.operation_index < 0:
+            raise InventorPlanError("ParameterBinding operation_index must be non-negative.")
+        if self.target != "extent":
+            raise InventorPlanError(f"Unsupported parameter target={self.target!r}.")
+        if not self.expression.strip():
+            raise InventorPlanError("ParameterBinding expression must not be empty.")
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "operation_index": self.operation_index,
+            "target": self.target,
+            "expression": self.expression,
+        }
+
+
+Operation: TypeAlias = (
+    OuterCylinder
+    | DeferredCenterBore
+    | ApplyDeferredBores
+    | RectangleExtrude
+    | CircleExtrude
+    | Shell
+)
+
+
+@dataclass
+class EnclosurePlan:
+    """Two deterministic part plans for a Base/Lid enclosure."""
+
+    name: str
+    base: FeaturePlan
+    lid: FeaturePlan
+    parameters: dict[str, float] = field(default_factory=dict)
+    units: Literal["mm"] = PUBLIC_UNIT
+
+    def __post_init__(self) -> None:
+        self.name = self.name.strip()
+        if not self.name:
+            raise InventorPlanError("EnclosurePlan name must not be empty.")
+        if self.units != PUBLIC_UNIT:
+            raise InventorPlanError(f"EnclosurePlan units={self.units!r} must be 'mm'.")
+        self.parameters = {str(key): float(value) for key, value in self.parameters.items()}
+        self.validate()
+
+    def validate(self) -> None:
+        self.base.validate()
+        self.lid.validate()
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        self.validate()
+        return {
+            "name": self.name,
+            "units": self.units,
+            "parameters": {key: _clean_number(value) for key, value in self.parameters.items()},
+            "documents": {"base": self.base.to_dict(), "lid": self.lid.to_dict()},
+        }
+
+    def to_json(self, *, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent)
+
+    def explain(self) -> str:
+        self.validate()
+        return "\n\n".join(
+            [
+                f"EnclosurePlan: {self.name}",
+                f"parameters: {json.dumps(self.to_dict()['parameters'], sort_keys=True)}",
+                "[Base]",
+                self.base.explain(include_save=True),
+                "[Lid]",
+                self.lid.explain(include_save=True),
+            ]
+        )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, JsonValue]) -> "EnclosurePlan":
+        name = data.get("name")
+        units = data.get("units", PUBLIC_UNIT)
+        parameters = data.get("parameters", {})
+        documents = data.get("documents")
+        if not isinstance(name, str) or not isinstance(documents, dict):
+            raise InventorPlanError("EnclosurePlan requires a name and documents object.")
+        if not isinstance(parameters, dict) or any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            for value in parameters.values()
+        ):
+            raise InventorPlanError("EnclosurePlan parameters must be numeric.")
+        base = documents.get("base")
+        lid = documents.get("lid")
+        if not isinstance(base, dict) or not isinstance(lid, dict):
+            raise InventorPlanError("EnclosurePlan documents must contain base and lid objects.")
+        if units != PUBLIC_UNIT:
+            raise InventorPlanError(f"EnclosurePlan units={units!r} must be 'mm'.")
+        return cls(
+            name=name,
+            units=cast(Literal["mm"], units),
+            parameters={key: float(value) for key, value in parameters.items()},
+            base=FeaturePlan.from_dict(cast(Mapping[str, JsonValue], base)),
+            lid=FeaturePlan.from_dict(cast(Mapping[str, JsonValue], lid)),
+        )
+
+    @classmethod
+    def from_json(cls, value: str) -> "EnclosurePlan":
+        raw = json.loads(value)
+        if not isinstance(raw, dict):
+            raise InventorPlanError("EnclosurePlan JSON must decode to an object.")
+        return cls.from_dict(raw)
 
 
 @dataclass
@@ -89,6 +323,8 @@ class FeaturePlan:
 
     name: str
     operations: list[Operation] = field(default_factory=list)
+    parameters: dict[str, float] = field(default_factory=dict)
+    parameter_bindings: list[ParameterBinding] = field(default_factory=list)
     units: Literal["mm"] = PUBLIC_UNIT
 
     def __post_init__(self) -> None:
@@ -98,6 +334,8 @@ class FeaturePlan:
         if self.units != PUBLIC_UNIT:
             raise InventorPlanError(f"FeaturePlan units={self.units!r} must be 'mm'.")
         self.operations = list(self.operations)
+        self.parameters = {str(key): float(value) for key, value in self.parameters.items()}
+        self.parameter_bindings = list(self.parameter_bindings)
         self.validate()
 
     @property
@@ -110,6 +348,8 @@ class FeaturePlan:
         return FeaturePlan(
             name=self.name,
             operations=[*self.operations, operation],
+            parameters=self.parameters,
+            parameter_bindings=self.parameter_bindings,
             units=self.units,
         )
 
@@ -119,14 +359,37 @@ class FeaturePlan:
         return FeaturePlan(
             name=self.name,
             operations=[*self.operations, *other.operations],
+            parameters={**self.parameters, **other.parameters},
+            parameter_bindings=[
+                *self.parameter_bindings,
+                *[
+                    ParameterBinding(
+                        operation_index=binding.operation_index + len(self.operations),
+                        target=binding.target,
+                        expression=binding.expression,
+                    )
+                    for binding in other.parameter_bindings
+                ],
+            ],
             units=self.units,
         )
 
     def validate(self) -> None:
+        for name, value in self.parameters.items():
+            if not name or isinstance(value, bool):
+                raise InventorPlanError("FeaturePlan parameter names and values must be valid.")
+            numeric_mm(name, value)
+        for binding in self.parameter_bindings:
+            if binding.operation_index >= len(self.operations):
+                raise InventorPlanError(
+                    f"ParameterBinding operation_index={binding.operation_index} is out of range."
+                )
+
         outer_diameters: list[float] = []
         deferred_bores: list[DeferredCenterBore] = []
         saw_deferred = False
         applied = False
+        saw_solid = False
 
         for index, operation in enumerate(self.operations, start=1):
             if isinstance(operation, OuterCylinder):
@@ -135,6 +398,7 @@ class FeaturePlan:
                         f"operation {index} outer_cylinder must appear before deferred bores."
                     )
                 outer_diameters.append(operation.diameter_mm)
+                saw_solid = True
             elif isinstance(operation, DeferredCenterBore):
                 if applied:
                     raise InventorPlanError(
@@ -148,8 +412,16 @@ class FeaturePlan:
                 if not deferred_bores:
                     raise InventorPlanError(
                         "apply_deferred_bores requires a deferred_center_bore first."
-                )
+                    )
                 applied = True
+            elif isinstance(operation, RectangleExtrude | CircleExtrude):
+                if operation.operation == "cut" and not saw_solid:
+                    raise InventorPlanError(f"operation {index} cut requires a preceding solid.")
+                if operation.operation == "join":
+                    saw_solid = True
+            elif isinstance(operation, Shell):
+                if not saw_solid:
+                    raise InventorPlanError(f"operation {index} shell requires a preceding solid.")
             else:
                 raise InventorPlanError(
                     f"operation {index} has unsupported type {type(operation)!r}."
@@ -171,11 +443,20 @@ class FeaturePlan:
 
     def to_dict(self) -> dict[str, JsonValue]:
         self.validate()
-        return {
+        result: dict[str, JsonValue] = {
             "name": self.name,
             "units": self.units,
             "operations": [operation.to_dict() for operation in self.operations],
         }
+        if self.parameters:
+            result["parameters"] = {
+                key: _clean_number(value) for key, value in self.parameters.items()
+            }
+        if self.parameter_bindings:
+            result["parameter_bindings"] = [
+                binding.to_dict() for binding in self.parameter_bindings
+            ]
+        return result
 
     def to_json(self, *, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent)
@@ -232,6 +513,44 @@ class FeaturePlan:
                     'extent="through_all_symmetric")'
                 )
                 operation_number += 1
+            elif isinstance(operation, RectangleExtrude):
+                lines.append(
+                    "  "
+                    f'{operation_number}. sketch_rectangle(plane="{operation.plane}", '
+                    f"center=({_format_number(operation.x_mm)},{_format_number(operation.y_mm)},"
+                    f"{_format_number(operation.z_mm)}), width={_format_number(operation.width_mm)}, "
+                    f"height={_format_number(operation.height_mm)})"
+                )
+                operation_number += 1
+                lines.append(
+                    "  "
+                    f"{operation_number}. extrude_{operation.operation}("
+                    f"distance={_format_number(operation.length_mm)}, "
+                    f'direction="{operation.direction}")'
+                )
+                operation_number += 1
+            elif isinstance(operation, CircleExtrude):
+                lines.append(
+                    "  "
+                    f'{operation_number}. sketch_circle(plane="{operation.plane}", '
+                    f"center=({_format_number(operation.x_mm)},{_format_number(operation.y_mm)},"
+                    f"{_format_number(operation.z_mm)}), diameter={_format_number(operation.diameter_mm)})"
+                )
+                operation_number += 1
+                lines.append(
+                    "  "
+                    f"{operation_number}. extrude_{operation.operation}("
+                    f"distance={_format_number(operation.length_mm)}, "
+                    f'direction="{operation.direction}")'
+                )
+                operation_number += 1
+            elif isinstance(operation, Shell):
+                lines.append(
+                    "  "
+                    f"{operation_number}. shell(open_face=\"{operation.open_face}\", "
+                    f"thickness={_format_number(operation.thickness_mm)})"
+                )
+                operation_number += 1
 
         if include_save:
             lines.append(f"  {operation_number}. save()")
@@ -265,7 +584,46 @@ class FeaturePlan:
         if len(operations) != len(raw_operations):
             raise InventorPlanError("FeaturePlan operations must be objects.")
 
-        return cls(name=name, units=cast(Literal["mm"], units), operations=operations)
+        raw_parameters = data.get("parameters", {})
+        if not isinstance(raw_parameters, dict) or any(
+            not isinstance(key, str)
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            for key, value in raw_parameters.items()
+        ):
+            raise InventorPlanError("FeaturePlan parameters must be numeric.")
+        raw_bindings = data.get("parameter_bindings", [])
+        if not isinstance(raw_bindings, list):
+            raise InventorPlanError("FeaturePlan parameter_bindings must be a list.")
+        bindings: list[ParameterBinding] = []
+        for raw_binding in raw_bindings:
+            if not isinstance(raw_binding, dict):
+                raise InventorPlanError("FeaturePlan parameter bindings must be objects.")
+            operation_index = raw_binding.get("operation_index")
+            target = raw_binding.get("target")
+            expression = raw_binding.get("expression")
+            if (
+                isinstance(operation_index, bool)
+                or not isinstance(operation_index, int)
+                or target != "extent"
+                or not isinstance(expression, str)
+            ):
+                raise InventorPlanError("Invalid FeaturePlan parameter binding.")
+            bindings.append(
+                ParameterBinding(
+                    operation_index=operation_index,
+                    target="extent",
+                    expression=expression,
+                )
+            )
+
+        return cls(
+            name=name,
+            units=cast(Literal["mm"], units),
+            operations=operations,
+            parameters={key: float(value) for key, value in raw_parameters.items()},
+            parameter_bindings=bindings,
+        )
 
     @classmethod
     def from_json(cls, value: str) -> "FeaturePlan":
@@ -293,6 +651,37 @@ def operation_from_dict(data: Mapping[str, JsonValue]) -> Operation:
         )
     if operation_type == "apply_deferred_bores":
         return ApplyDeferredBores()
+    if operation_type == "rectangle_extrude":
+        return RectangleExtrude(
+            width_mm=float(_required_number(data, "width")),
+            height_mm=float(_required_number(data, "height")),
+            x_mm=float(_required_number(data, "x")),
+            y_mm=float(_required_number(data, "y")),
+            z_mm=float(_required_number(data, "z")),
+            length_mm=float(_required_number(data, "length")),
+            operation=cast(FeatureOperation, data.get("operation", "join")),
+            plane=cast(PlaneName, data.get("plane", "XY")),
+            direction=cast(ExtentDirection, data.get("direction", "positive")),
+        )
+    if operation_type == "circle_extrude":
+        return CircleExtrude(
+            diameter_mm=float(_required_number(data, "diameter")),
+            x_mm=float(_required_number(data, "x")),
+            y_mm=float(_required_number(data, "y")),
+            z_mm=float(_required_number(data, "z")),
+            length_mm=float(_required_number(data, "length")),
+            operation=cast(FeatureOperation, data.get("operation", "cut")),
+            plane=cast(PlaneName, data.get("plane", "XY")),
+            direction=cast(ExtentDirection, data.get("direction", "positive")),
+        )
+    if operation_type == "shell":
+        return Shell(
+            outer_width_mm=float(_required_number(data, "outer_width")),
+            outer_depth_mm=float(_required_number(data, "outer_depth")),
+            outer_height_mm=float(_required_number(data, "outer_height")),
+            thickness_mm=float(_required_number(data, "thickness")),
+            open_face=cast(Literal["top"], data.get("open_face", "top")),
+        )
     raise InventorPlanError(f"Unsupported operation type={operation_type!r}.")
 
 

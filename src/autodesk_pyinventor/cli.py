@@ -16,8 +16,14 @@ from .constants import WINDOWS_OS_NAME
 from .documents import find_standard_part_template
 from .exceptions import AutodeskPyInventorError
 from .part import Part
-from .plan import FeaturePlan
-from .recipes import disk_plan, flanged_tube_plan, tube_plan, washer_plan
+from .plan import EnclosurePlan, FeaturePlan
+from .recipes import (
+    astro_controller_enclosure_plan,
+    disk_plan,
+    flanged_tube_plan,
+    tube_plan,
+    washer_plan,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,6 +67,34 @@ def build_parser() -> argparse.ArgumentParser:
     flanged.add_argument("--flange-thickness", type=float, required=True)
     flanged.add_argument("--flange-z", type=float, default=0)
 
+    enclosure = subparsers.add_parser(
+        "astro-controller-enclosure",
+        help="Generate the Astro Controller Base and Lid enclosure parts.",
+    )
+    enclosure.add_argument("--name", default="astro_controller_enclosure")
+    enclosure.add_argument("--base-output", type=Path)
+    enclosure.add_argument("--lid-output", type=Path)
+    enclosure.add_argument("--base-stl", type=Path)
+    enclosure.add_argument("--lid-stl", type=Path)
+    enclosure.add_argument("--template", type=Path)
+    enclosure.add_argument("--visible", action="store_true")
+    enclosure.add_argument("--dry-run", action="store_true")
+    enclosure.add_argument("--json", action="store_true", help="Print dry-run output as JSON.")
+    enclosure.add_argument("--wall", type=float, default=2.0)
+    enclosure.add_argument("--out-x", type=float, default=84.0)
+    enclosure.add_argument("--out-y", type=float, default=58.0)
+    enclosure.add_argument("--base-h", type=float, default=29.5)
+    enclosure.add_argument("--lid-t", type=float, default=3.0)
+    enclosure.add_argument("--boss-h", type=float, default=4.0)
+    enclosure.add_argument("--fit", type=float, default=0.3)
+    enclosure.add_argument("--oled-window-width", type=float, default=23.0)
+    enclosure.add_argument("--oled-window-height", type=float, default=12.5)
+    enclosure.add_argument("--oled-window-x", type=float, default=28.0)
+    enclosure.add_argument("--oled-window-y", type=float, default=35.0)
+    enclosure.add_argument("--oled-pocket-size", type=float, default=28.6)
+    enclosure.add_argument("--oled-pocket-depth", type=float, default=1.8)
+    enclosure.add_argument("--encoder-hole-diameter", type=float, default=7.2)
+
     return parser
 
 
@@ -74,7 +108,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="Print dry-run output as JSON.")
 
 
-def plan_from_args(args: argparse.Namespace) -> FeaturePlan:
+def plan_from_args(args: argparse.Namespace) -> FeaturePlan | EnclosurePlan:
     name = _plan_name(args)
     if args.command == "disk":
         return disk_plan(
@@ -102,12 +136,32 @@ def plan_from_args(args: argparse.Namespace) -> FeaturePlan:
             flange_thickness=args.flange_thickness,
             flange_z=args.flange_z,
         )
+    if args.command == "astro-controller-enclosure":
+        return astro_controller_enclosure_plan(
+            name=name,
+            wall=args.wall,
+            out_x=args.out_x,
+            out_y=args.out_y,
+            base_h=args.base_h,
+            lid_t=args.lid_t,
+            boss_h=args.boss_h,
+            fit=args.fit,
+            oled_window_width=args.oled_window_width,
+            oled_window_height=args.oled_window_height,
+            oled_window_x=args.oled_window_x,
+            oled_window_y=args.oled_window_y,
+            oled_pocket_size=args.oled_pocket_size,
+            oled_pocket_depth=args.oled_pocket_depth,
+            encoder_hole_diameter=args.encoder_hole_diameter,
+        )
     raise ValueError(f"unsupported command: {args.command}")
 
 
 def _plan_name(args: argparse.Namespace) -> str:
     if args.name:
         return str(args.name)
+    if args.command == "astro-controller-enclosure":
+        return "astro_controller_enclosure"
     output = getattr(args, "output", None)
     if output is not None:
         return Path(output).stem
@@ -126,13 +180,19 @@ def run(args: argparse.Namespace) -> int:
         if args.json:
             print(plan.to_json())
         else:
-            print(
-                plan.explain(
-                    path=args.output,
-                    template=args.template or "standard.ipt",
+            if isinstance(plan, EnclosurePlan):
+                print(plan.explain())
+            else:
+                print(
+                    plan.explain(
+                        path=args.output,
+                        template=args.template or "standard.ipt",
+                    )
                 )
-            )
         return 0
+
+    if isinstance(plan, EnclosurePlan):
+        return _run_enclosure(args, plan)
 
     if args.output is None:
         raise AutodeskPyInventorError("--output is required unless --dry-run is set.")
@@ -145,6 +205,38 @@ def run(args: argparse.Namespace) -> int:
             part.export_stl(args.stl)
     finally:
         part.close()
+
+    return 0
+
+
+def _run_enclosure(args: argparse.Namespace, plan: EnclosurePlan) -> int:
+    if args.base_output is None or args.lid_output is None:
+        raise AutodeskPyInventorError(
+            "--base-output and --lid-output are required unless --dry-run is set."
+        )
+
+    app = connect(visible=args.visible)
+    parts: list[Part] = []
+    documents = [
+        (plan.base, args.base_output, args.base_stl),
+        (plan.lid, args.lid_output, args.lid_stl),
+    ]
+    try:
+        for document_plan, output, stl in documents:
+            part = Part.new(
+                app=app,
+                name=document_plan.name,
+                path=output,
+                template=args.template,
+            )
+            parts.append(part)
+            part.execute(document_plan)
+            part.save()
+            if stl is not None:
+                part.export_stl(stl)
+    finally:
+        for part in reversed(parts):
+            part.close()
 
     return 0
 
