@@ -39,7 +39,11 @@ def test_astro_controller_parts_parameters_and_assembly(inventor_tmp_path: Path)
     part_document_type = int(app.backend.constants.kPartDocumentObject)
     assembly_document_type = int(app.backend.constants.kAssemblyDocumentObject)
     expected_parameters = set(enclosure.parameters)
-    for path in (base_path, lid_path):
+    driven_parameters = (
+        (base_path, {"baseH", "bossH", "wall"}),
+        (lid_path, {"lidT", "oledPocketDepth"}),
+    )
+    for path, expected_driven in driven_parameters:
         document = app.raw.Documents.Open(str(path), False)
         try:
             assert int(document.DocumentType) == part_document_type
@@ -50,6 +54,8 @@ def test_astro_controller_parts_parameters_and_assembly(inventor_tmp_path: Path)
                 for index in range(1, int(user_parameters.Count) + 1)
             }
             assert actual >= expected_parameters
+            for name in expected_driven:
+                assert int(user_parameters.Item(name).Dependents.Count) >= 1
         finally:
             document.Close(False)
 
