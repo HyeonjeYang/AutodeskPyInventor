@@ -1,6 +1,7 @@
 """AutodeskPyInventor public API."""
 
 from .app import InventorApp, connect
+from .assembly import Assembly, EnclosureAssemblyPlan
 from .exceptions import (
     AutodeskPyInventorError,
     ExportError,
@@ -31,10 +32,12 @@ from .recipes import astro_controller_enclosure_plan, disk_plan, flanged_tube_pl
 __all__ = [
     "AutodeskPyInventorError",
     "ApplyDeferredBores",
+    "Assembly",
     "astro_controller_enclosure_plan",
     "CircleExtrude",
     "DeferredCenterBore",
     "EnclosurePlan",
+    "EnclosureAssemblyPlan",
     "ExportError",
     "FeaturePlan",
     "InventorApp",

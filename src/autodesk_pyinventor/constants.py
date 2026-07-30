@@ -16,10 +16,12 @@ INVENTOR_PROG_ID = "Inventor.Application"
 # Inventor enum values used by the narrow COM backend. These are intentionally
 # limited to the operations this library supports.
 PART_DOCUMENT_TYPE = 12290
+ASSEMBLY_DOCUMENT_TYPE = 12291
 JOIN_OPERATION = 20481
 CUT_OPERATION = 20482
 POSITIVE_EXTENT_DIRECTION = 20993
 XY_WORK_PLANE_INDEX = 3
 
 PART_SUFFIX = ".ipt"
+ASSEMBLY_SUFFIX = ".iam"
 STL_SUFFIX = ".stl"

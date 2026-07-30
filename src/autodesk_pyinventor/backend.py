@@ -180,6 +180,14 @@ class InventorBackend:
                 f"Could not save the Inventor document. Original COM error: {exc}"
             ) from exc
 
+    def new_assembly_document(self) -> Any:
+        try:
+            return self.app.Documents.Add(self._constant("kAssemblyDocumentObject"))
+        except Exception as exc:
+            raise InventorDocumentError(
+                f"Could not create an Inventor assembly document. Original COM error: {exc}"
+            ) from exc
+
     def close_document(self, document: Any, *, save_changes: bool = False) -> None:
         try:
             document.Close(save_changes)

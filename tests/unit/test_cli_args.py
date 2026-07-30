@@ -110,6 +110,37 @@ def test_cli_astro_controller_requires_two_outputs(capsys: pytest.CaptureFixture
     assert "--base-output and --lid-output" in captured.err
 
 
+def test_cli_assembly_dry_run_json_has_expected_translation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(["astro-controller-assembly", "--dry-run", "--json", "--base-h", "31"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["occurrences"][0]["translation"] == [0.0, 0.0, 0.0]
+    assert payload["occurrences"][1]["translation"] == [0.0, 0.0, 31.0]
+
+
+def test_cli_assembly_requires_output_paths(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["astro-controller-assembly"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "--base-input, --lid-input, and --output" in captured.err
+
+
+def test_cli_validate_only_does_not_start_com(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "connect", lambda **_: pytest.fail("COM must not start"))
+
+    exit_code = main(["astro-controller-enclosure", "--validate-only", "--json"])
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["parameters"]["baseH"] == 29.5
+
+
 def test_cli_requires_output_for_real_execution(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main(["disk", "--od", "80", "--thickness", "8"])
 

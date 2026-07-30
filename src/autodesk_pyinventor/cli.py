@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Sequence, cast
 
 from .app import connect
+from .assembly import Assembly, EnclosureAssemblyPlan
 from .constants import WINDOWS_OS_NAME
 from .documents import find_standard_part_template
 from .exceptions import AutodeskPyInventorError
@@ -79,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     enclosure.add_argument("--template", type=Path)
     enclosure.add_argument("--visible", action="store_true")
     enclosure.add_argument("--dry-run", action="store_true")
+    enclosure.add_argument("--validate-only", action="store_true")
     enclosure.add_argument("--json", action="store_true", help="Print dry-run output as JSON.")
     enclosure.add_argument("--wall", type=float, default=2.0)
     enclosure.add_argument("--out-x", type=float, default=84.0)
@@ -95,6 +97,20 @@ def build_parser() -> argparse.ArgumentParser:
     enclosure.add_argument("--oled-pocket-depth", type=float, default=1.8)
     enclosure.add_argument("--encoder-hole-diameter", type=float, default=7.2)
 
+    assembly = subparsers.add_parser(
+        "astro-controller-assembly",
+        help="Place Astro Controller Base and Lid parts in an Inventor assembly.",
+    )
+    assembly.add_argument("--name", default="astro_controller")
+    assembly.add_argument("--base-input", type=Path)
+    assembly.add_argument("--lid-input", type=Path)
+    assembly.add_argument("--output", type=Path)
+    assembly.add_argument("--base-h", type=float, default=29.5)
+    assembly.add_argument("--visible", action="store_true")
+    assembly.add_argument("--dry-run", action="store_true")
+    assembly.add_argument("--validate-only", action="store_true")
+    assembly.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -108,7 +124,9 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="Print dry-run output as JSON.")
 
 
-def plan_from_args(args: argparse.Namespace) -> FeaturePlan | EnclosurePlan:
+def plan_from_args(
+    args: argparse.Namespace,
+) -> FeaturePlan | EnclosurePlan | EnclosureAssemblyPlan:
     name = _plan_name(args)
     if args.command == "disk":
         return disk_plan(
@@ -154,13 +172,21 @@ def plan_from_args(args: argparse.Namespace) -> FeaturePlan | EnclosurePlan:
             oled_pocket_depth=args.oled_pocket_depth,
             encoder_hole_diameter=args.encoder_hole_diameter,
         )
+    if args.command == "astro-controller-assembly":
+        return EnclosureAssemblyPlan(
+            name=name,
+            base_input=args.base_input,
+            lid_input=args.lid_input,
+            output=args.output,
+            base_h_mm=args.base_h,
+        )
     raise ValueError(f"unsupported command: {args.command}")
 
 
 def _plan_name(args: argparse.Namespace) -> str:
     if args.name:
         return str(args.name)
-    if args.command == "astro-controller-enclosure":
+    if args.command in ("astro-controller-enclosure", "astro-controller-assembly"):
         return "astro_controller_enclosure"
     output = getattr(args, "output", None)
     if output is not None:
@@ -176,12 +202,16 @@ def run(args: argparse.Namespace) -> int:
 
     plan = plan_from_args(args)
 
-    if args.dry_run:
+    if args.dry_run or getattr(args, "validate_only", False):
         if args.json:
             print(plan.to_json())
+        elif getattr(args, "validate_only", False):
+            print(f"valid: {plan.name}")
         else:
             if isinstance(plan, EnclosurePlan):
                 print(plan.explain())
+            elif isinstance(plan, EnclosureAssemblyPlan):
+                print(plan.to_json())
             else:
                 print(
                     plan.explain(
@@ -189,6 +219,12 @@ def run(args: argparse.Namespace) -> int:
                         template=args.template or "standard.ipt",
                     )
                 )
+        return 0
+
+    if isinstance(plan, EnclosureAssemblyPlan):
+        plan.validate_for_execution()
+        assembly = Assembly.from_plan(app=connect(visible=args.visible), plan=plan)
+        assembly.close()
         return 0
 
     if isinstance(plan, EnclosurePlan):
