@@ -1,189 +1,80 @@
 # AutodeskPyInventor
 
-Unofficial Windows-only Python automation for Autodesk Inventor through the COM API.
+Windows용 Autodesk Inventor COM 자동화 라이브러리입니다. 모든 recipe는 먼저 검증 가능한
+`FeaturePlan`을 만들므로 Inventor 없이도 unit test와 dry-run을 실행할 수 있습니다.
 
-## What is AutodeskPyInventor?
-
-AutodeskPyInventor is an Inventor-safe geometry builder for common generated mechanical parts.
-It is millimeter-first, recipe-first, and focused on reliable part generation.
-
-Current recipes:
-
-- disk
-- washer
-- tube
-- flanged tube
-
-## Why this project exists
-
-Inventor COM automation has sharp edges: templates, units, one-indexed collections, sketch planes,
-and through-all cuts can all fail in non-obvious ways. This package hides those quirks behind small
-Python APIs and deterministic feature plans.
-
-## How it differs from older PyInventor-style wrappers
-
-This is not a broad FreeCAD clone and not a generic wrapper over every Inventor COM object.
-
-Unlike generic COM wrappers, AutodeskPyInventor builds a FeaturePlan first. The plan can be
-validated, printed, tested, serialized, and then executed against Inventor. This makes generation
-safer and easier to debug, especially when using LLMs or Codex to generate CAD scripts.
-
-## Installation
+## 설치와 기본 사용
 
 ```powershell
 python -m pip install -e ".[dev]"
+autodesk-pyinventor disk --od 80 --id 25 --thickness 8 --output generated\washer.ipt
+autodesk-pyinventor tube --od 63.5 --id 56.5 --length 236 --output generated\tube.ipt
 ```
 
-Runtime requirements:
+`disk`, `washer`, `tube`, `flanged-tube` recipe가 지원됩니다.
 
-- Windows
-- Python 3.10+
-- Autodesk Inventor
-- pywin32
+## Astro Controller
 
-## Quick start
-
-```python
-from pathlib import Path
-import autodesk_pyinventor as api
-
-app = api.connect(visible=True)
-
-part = api.Part.new(
-    app=app,
-    name="washer",
-    path=Path(r"C:\temp\washer.ipt"),
-)
-
-part.disk(od=80, id=25, thickness=8)
-part.save()
-part.export_stl(Path(r"C:\temp\washer.stl"))
-part.close()
-```
-
-## CLI examples
+Base/Lid 계획 확인과 실제 IPT 생성:
 
 ```powershell
-autodesk-pyinventor doctor
-autodesk-pyinventor doctor --strict
-
-autodesk-pyinventor disk `
-  --output C:\temp\washer.ipt `
-  --od 80 `
-  --id 25 `
-  --thickness 8 `
-  --stl C:\temp\washer.stl
-
-autodesk-pyinventor tube `
-  --output C:\temp\tube.ipt `
-  --od 63.5 `
-  --id 56.5 `
-  --length 236
-
-autodesk-pyinventor flanged-tube `
-  --output C:\temp\flanged_tube.ipt `
-  --body-od 63.5 `
-  --body-id 56.5 `
-  --body-length 236 `
-  --flange-od 90 `
-  --flange-thickness 8 `
-  --flange-z 0
+autodesk-pyinventor astro-controller-enclosure --dry-run --json
+autodesk-pyinventor astro-controller-enclosure --validate-only --json
+autodesk-pyinventor astro-controller-enclosure `
+  --base-output generated\astro_controller_base.ipt `
+  --lid-output generated\astro_controller_lid.ipt `
+  --base-stl generated\astro_controller_base.stl `
+  --lid-stl generated\astro_controller_lid.stl --visible
 ```
 
-## Python API examples
+생성된 두 IPT에는 `wall`, `outX`, `outY`, `baseH`, `lidT`, `bossH`, `fit`,
+`oledWindow*`, `oledPocket*`, `encoderHoleDiameter` mm UserParameters가 표시됩니다.
+`baseH`, `lidT`, `bossH`, `wall`, `oledPocketDepth`는 가능한 extrusion 거리에 연결됩니다.
 
-```python
-part.tube(
-    od=63.5,
-    id=56.5,
-    length=236,
-)
-
-part.flanged_tube(
-    body_od=63.5,
-    body_id=56.5,
-    body_length=236,
-    flange_od=90,
-    flange_thickness=8,
-    flange_z=0,
-)
-```
-
-## Dry-run mode
-
-Dry run validates and prints the plan without starting Inventor.
+Assembly 계획 확인과 IAM 생성:
 
 ```powershell
-autodesk-pyinventor disk --od 80 --id 25 --thickness 8 --dry-run
-autodesk-pyinventor disk --od 80 --id 25 --thickness 8 --dry-run --json
+autodesk-pyinventor astro-controller-assembly --dry-run --json
+autodesk-pyinventor astro-controller-assembly `
+  --base-input generated\astro_controller_base.ipt `
+  --lid-input generated\astro_controller_lid.ipt `
+  --output generated\astro_controller.iam --visible
 ```
 
-Flanged tubes create all outer solids first, then apply the center bore once at the end.
+Base는 원점에, Lid의 로컬 Z=0은 `baseH`에 배치됩니다. 기존 IAM은 덮어쓰지 않습니다.
 
-## Known Inventor COM quirks handled by this library
+권장 출력:
 
-- Uses `win32com.client.gencache.EnsureDispatch("Inventor.Application")`.
-- Loads Inventor constants after COM dispatch.
-- Copies a standard part template to the output path before opening it.
-- Uses `.Item(n)` for Inventor collections.
-- Treats WorkPlanes as one-indexed: YZ=1, XZ=2, XY=3.
-- Sketches directly on XY when `z=0`.
-- Uses offset work planes only for nonzero `z`.
-- Builds outer solids before deferred bores.
-- Applies the center bore once using a symmetric through-all cut.
-- Exports STL through `part_doc.SaveAs(stl_path, True)`.
-
-## Limitations
-
-Out of scope for v0.1:
-
-- full sketch constraint system
-- full parametric dimension management
-- drawing generation
-- STEP translator customization
-- thread and coil automation
-- arbitrary boolean modeling
-- cloud Design Automation
-- MCP server
-- natural language CAD generation
-- GUI
-
-## Testing
-
-Unit tests do not require Inventor:
-
-```powershell
-pytest tests/unit
+```text
+generated/
+  astro_controller_base.ipt
+  astro_controller_lid.ipt
+  astro_controller.iam
+  astro_controller_base.stl
+  astro_controller_lid.stl
+  astro_controller_plan.json
 ```
 
-Integration tests require Windows, Autodesk Inventor, and explicit opt-in:
+## 지원 범위와 제한
+
+- dry-run, JSON, validate-only, unit test에는 Inventor가 필요 없습니다.
+- IPT/IAM/STL 생성과 integration test에는 Windows, Inventor, pywin32가 필요합니다.
+- `fit`은 향후 Base/Lid mating rim의 간극용 값입니다. 현재 형상에는 림이 없어
+  UserParameter로만 존재하며 실제 치수를 구동하지 않습니다.
+- 외형 sketch 폭/높이와 홀 위치는 현재 고정 sketch geometry이므로 UserParameter 변경 후
+  자동 재계산되지 않습니다. 연결됐다고 보장되는 항목은 위 extrusion 거리뿐입니다.
+- drawing, thread/coil, 임의 boolean, cloud Design Automation은 지원하지 않습니다.
+
+## 테스트
 
 ```powershell
+pytest
+git diff --check
+
 $env:AUTODESK_PYINVENTOR_RUN_INTEGRATION=1
-pytest tests/integration
+pytest tests\integration
 ```
 
-## Troubleshooting
+`doctor --strict`로 로컬 Inventor 연결과 template 상태를 확인할 수 있습니다.
 
-Run:
-
-```powershell
-autodesk-pyinventor doctor
-```
-
-Use `--strict` when a failing readiness check should return a nonzero exit code.
-
-Common fixes:
-
-- `pywin32 is not installed`: run `python -m pip install pywin32`
-- `Inventor COM connection failed`: make sure Autodesk Inventor is installed
-- `Constants are unavailable`: try clearing the `win32com` `gen_py` cache
-- `Template not found`: pass `--template C:\path\to\Standard.ipt`
-
-## License
-
-MIT License. See [LICENSE](LICENSE).
-
-## Disclaimer: unofficial, not affiliated with Autodesk
-
-AutodeskPyInventor is unofficial. It is not affiliated with, endorsed by, or sponsored by Autodesk.
+MIT License. Autodesk와 제휴하거나 Autodesk가 보증하는 프로젝트가 아닙니다.

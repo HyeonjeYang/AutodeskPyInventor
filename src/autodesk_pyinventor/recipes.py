@@ -194,6 +194,19 @@ def astro_controller_enclosure_plan(
     pico_bosses = [(18.5, 34.3), (65.5, 34.3), (18.5, 45.7), (65.5, 45.7)]
     proto_bosses = [(34.5, 8.5), (49.5, 8.5), (34.5, 23.5), (49.5, 23.5)]
     corner_bosses = [(6.0, 6.0), (78.0, 6.0), (6.0, 50.0), (78.0, 50.0)]
+    boss_groups = (
+        ("Pico boss", pico_bosses, 2.25),
+        ("Proto boss", proto_bosses, 2.25),
+        ("corner boss", corner_bosses, 3.0),
+    )
+    all_bosses: list[tuple[str, float, float, float]] = []
+    for label, centers, radius in boss_groups:
+        for x_mm, y_mm in centers:
+            _ensure_point_inside(label, x_mm, y_mm, width_mm, depth_mm, radius)
+            all_bosses.append((label, x_mm, y_mm, radius))
+    _ensure_circles_do_not_overlap(all_bosses)
+    for x_mm, y_mm in corner_bosses:
+        _ensure_point_inside("corner hole", x_mm, y_mm, width_mm, depth_mm, 3.0)
 
     base_operations: list[Operation] = [
         RectangleExtrude(
@@ -467,3 +480,13 @@ def _ensure_point_inside(
         raise InventorValidationError(f"{label} must fit within out_x.")
     if y - radius < 0 or y + radius > outer_height:
         raise InventorValidationError(f"{label} must fit within out_y.")
+
+
+def _ensure_circles_do_not_overlap(
+    circles: list[tuple[str, float, float, float]],
+) -> None:
+    for index, (label_a, x_a, y_a, radius_a) in enumerate(circles):
+        for label_b, x_b, y_b, radius_b in circles[index + 1 :]:
+            distance_squared = (x_b - x_a) ** 2 + (y_b - y_a) ** 2
+            if distance_squared < (radius_a + radius_b) ** 2:
+                raise InventorValidationError(f"{label_a} and {label_b} must not overlap.")
