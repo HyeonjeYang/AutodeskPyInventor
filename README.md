@@ -1,6 +1,6 @@
 # AutodeskPyInventor
 
-**Python automation for Autodesk Inventor, built for both humans and AI coding agents.**
+Python automation for Autodesk Inventor, built for both humans and AI coding agents.
 ---
 
 ## Quickstart
