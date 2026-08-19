@@ -1,9 +1,6 @@
 # AutodeskPyInventor
 
-**Reliability-first Python automation for Autodesk Inventor, built for both humans and AI coding agents.**
-
-Every CAD recipe first builds a validated, serializable `FeaturePlan`. Plans can be inspected, unit-tested, and dry-run **without Inventor installed** — only real part/assembly generation and STL export need Windows + Inventor.
-
+**Python automation for Autodesk Inventor, built for both humans and AI coding agents.**
 ---
 
 ## Quickstart
