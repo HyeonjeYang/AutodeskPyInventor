@@ -39,6 +39,7 @@ from .plan import (
     OuterCylinder,
     OrientedRectangleExtrude,
     PolygonExtrude,
+    ProfileExtrude,
     RectangleExtrude,
     Shell,
 )
@@ -68,18 +69,26 @@ class InventorBackend:
 
         pythoncom.CoInitialize()
 
+        app = None
         try:
-            app = win32_client.gencache.EnsureDispatch(INVENTOR_PROG_ID)
-            INV = win32_client.constants
-        except Exception as ensure_exc:
+            app = win32_client.GetActiveObject(INVENTOR_PROG_ID)
+            INV = getattr(win32_client, "constants", _inventor_fallback_constants())
+        except Exception:
+            app = None
+
+        if app is None:
             try:
-                app = win32_client.dynamic.Dispatch(INVENTOR_PROG_ID)
-                INV = _inventor_fallback_constants()
-            except Exception as dynamic_exc:
-                raise InventorConnectionError(
-                    "Inventor COM connection failed. Make sure Autodesk Inventor is installed. "
-                    f"EnsureDispatch error: {ensure_exc}; dynamic Dispatch error: {dynamic_exc}"
-                ) from dynamic_exc
+                app = win32_client.gencache.EnsureDispatch(INVENTOR_PROG_ID)
+                INV = win32_client.constants
+            except Exception as ensure_exc:
+                try:
+                    app = win32_client.dynamic.Dispatch(INVENTOR_PROG_ID)
+                    INV = _inventor_fallback_constants()
+                except Exception as dynamic_exc:
+                    raise InventorConnectionError(
+                        "Inventor COM connection failed. Make sure Autodesk Inventor is installed. "
+                        f"EnsureDispatch error: {ensure_exc}; dynamic Dispatch error: {dynamic_exc}"
+                    ) from dynamic_exc
 
         try:
             app.Visible = visible
@@ -154,6 +163,8 @@ class InventorBackend:
                 feature = self._add_polygon_extrude(document, operation)
             elif isinstance(operation, AnnularSectorExtrude):
                 feature = self._add_annular_sector_extrude(document, operation)
+            elif isinstance(operation, ProfileExtrude):
+                feature = self._add_profile_extrude(document, operation)
             elif isinstance(operation, Shell):
                 feature = self._add_shell(document, operation)
             binding = bindings.get(operation_index)
@@ -437,7 +448,7 @@ class InventorBackend:
             component_definition = document.ComponentDefinition
             work_plane = self._work_plane_for_plane(component_definition, "XY", operation.z_mm)
             sketch = component_definition.Sketches.Add(work_plane)
-            points = _rotated_rectangle_points(
+            geometry_points = _rotated_rectangle_points(
                 self.app.TransientGeometry,
                 operation.x_mm,
                 operation.y_mm,
@@ -445,6 +456,7 @@ class InventorBackend:
                 operation.height_mm,
                 operation.angle_deg,
             )
+            points = [sketch.SketchPoints.Add(point) for point in geometry_points]
             for index, start in enumerate(points):
                 sketch.SketchLines.AddByTwoPoints(start, points[(index + 1) % len(points)])
             profile = sketch.Profiles.AddForSolid()
@@ -470,16 +482,23 @@ class InventorBackend:
     def _add_polygon_extrude(self, document: Any, operation: PolygonExtrude) -> Any:
         try:
             component_definition = document.ComponentDefinition
-            work_plane = self._work_plane_for_plane(component_definition, "XY", operation.z_mm)
+            center_u_mm, center_v_mm, offset_mm = _plane_coordinates(
+                operation.plane,
+                x_mm=operation.x_mm,
+                y_mm=operation.y_mm,
+                z_mm=operation.z_mm,
+            )
+            work_plane = self._work_plane_for_plane(component_definition, operation.plane, offset_mm)
             sketch = component_definition.Sketches.Add(work_plane)
-            points = _polygon_points(
+            geometry_points = _polygon_points(
                 self.app.TransientGeometry,
                 operation.sides,
                 operation.circumradius_mm,
-                operation.x_mm,
-                operation.y_mm,
+                center_u_mm,
+                center_v_mm,
                 operation.rotation_deg,
             )
+            points = [sketch.SketchPoints.Add(point) for point in geometry_points]
             for index, start in enumerate(points):
                 sketch.SketchLines.AddByTwoPoints(start, points[(index + 1) % len(points)])
             profile = sketch.Profiles.AddForSolid()
@@ -510,24 +529,16 @@ class InventorBackend:
             component_definition = document.ComponentDefinition
             work_plane = self._work_plane_for_plane(component_definition, "XY", operation.z_mm)
             sketch = component_definition.Sketches.Add(work_plane)
-            transient_geometry = self.app.TransientGeometry
-            center = transient_geometry.CreatePoint2d(0, 0)
-            outer_start = _polar_point(
-                transient_geometry, operation.outer_radius_mm, operation.start_angle_deg
+            geometry_points = _annular_sector_points(
+                self.app.TransientGeometry,
+                operation.inner_radius_mm,
+                operation.outer_radius_mm,
+                operation.start_angle_deg,
+                operation.end_angle_deg,
             )
-            outer_end = _polar_point(
-                transient_geometry, operation.outer_radius_mm, operation.end_angle_deg
-            )
-            inner_start = _polar_point(
-                transient_geometry, operation.inner_radius_mm, operation.start_angle_deg
-            )
-            inner_end = _polar_point(
-                transient_geometry, operation.inner_radius_mm, operation.end_angle_deg
-            )
-            sketch.SketchArcs.AddByCenterStartEnd(center, outer_start, outer_end)
-            sketch.SketchLines.AddByTwoPoints(outer_end, inner_end)
-            sketch.SketchArcs.AddByCenterStartEnd(center, inner_end, inner_start)
-            sketch.SketchLines.AddByTwoPoints(inner_start, outer_start)
+            points = [sketch.SketchPoints.Add(point) for point in geometry_points]
+            for index, start in enumerate(points):
+                sketch.SketchLines.AddByTwoPoints(start, points[(index + 1) % len(points)])
             profile = sketch.Profiles.AddForSolid()
             definition = component_definition.Features.ExtrudeFeatures.CreateExtrudeDefinition(
                 profile,
@@ -545,6 +556,41 @@ class InventorBackend:
         except Exception as exc:
             raise InventorGeometryError(
                 "Could not create annular sector. Original COM error: " f"{exc}"
+            ) from exc
+
+    def _add_profile_extrude(self, document: Any, operation: ProfileExtrude) -> Any:
+        try:
+            component_definition = document.ComponentDefinition
+            work_plane = self._work_plane_for_plane(
+                component_definition,
+                operation.plane,
+                operation.offset_mm,
+            )
+            sketch = component_definition.Sketches.Add(work_plane)
+            geometry_points = [
+                self.app.TransientGeometry.CreatePoint2d(mm_to_cm(x), mm_to_cm(y))
+                for x, y in operation.points
+            ]
+            points = [sketch.SketchPoints.Add(point) for point in geometry_points]
+            for index, start in enumerate(points):
+                sketch.SketchLines.AddByTwoPoints(start, points[(index + 1) % len(points)])
+            profile = sketch.Profiles.AddForSolid()
+            definition = component_definition.Features.ExtrudeFeatures.CreateExtrudeDefinition(
+                profile,
+                self._constant(
+                    "kJoinOperation" if operation.operation == "join" else "kCutOperation"
+                ),
+            )
+            definition.SetDistanceExtent(
+                mm_to_cm(operation.length_mm),
+                self._extent_direction(operation.direction),
+            )
+            feature = component_definition.Features.ExtrudeFeatures.Add(definition)
+            _try_set_attribute(feature, "Name", f"profile {operation.operation}")
+            return feature
+        except Exception as exc:
+            raise InventorGeometryError(
+                f"Could not create profile on {operation.plane}. Original COM error: {exc}"
             ) from exc
 
     def _extent_direction(self, direction: str) -> int:
@@ -639,6 +685,35 @@ def _polar_point(transient_geometry: Any, radius_mm: float, angle_deg: float) ->
         mm_to_cm(radius_mm * math.cos(angle)),
         mm_to_cm(radius_mm * math.sin(angle)),
     )
+
+
+def _annular_sector_points(
+    transient_geometry: Any,
+    inner_radius_mm: float,
+    outer_radius_mm: float,
+    start_angle_deg: float,
+    end_angle_deg: float,
+    segments: int = 64,
+) -> list[Any]:
+    """Approximate arcs with a fine polygon for reliable Inventor profiles."""
+
+    points = [
+        _polar_point(
+            transient_geometry,
+            outer_radius_mm,
+            start_angle_deg + (end_angle_deg - start_angle_deg) * index / segments,
+        )
+        for index in range(segments + 1)
+    ]
+    points.extend(
+        _polar_point(
+            transient_geometry,
+            inner_radius_mm,
+            end_angle_deg - (end_angle_deg - start_angle_deg) * index / segments,
+        )
+        for index in range(1, segments)
+    )
+    return points
 
 
 def _rotated_rectangle_points(

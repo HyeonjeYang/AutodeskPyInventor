@@ -17,9 +17,12 @@ from .constants import WINDOWS_OS_NAME
 from .documents import find_standard_part_template
 from .exceptions import AutodeskPyInventorError
 from .part import Part
-from .plan import EnclosurePlan, FeaturePlan
+from .plan import EnclosurePlan, FeaturePlan, MultiPartPlan
 from .recipes import (
+    astro_controller_accessory_plans,
     astro_controller_enclosure_plan,
+    astro_kit_addon_plans,
+    barn_door_star_tracker_plans,
     disk_plan,
     flanged_tube_plan,
     tube_plan,
@@ -111,6 +114,56 @@ def build_parser() -> argparse.ArgumentParser:
     assembly.add_argument("--validate-only", action="store_true")
     assembly.add_argument("--json", action="store_true")
 
+    accessories = subparsers.add_parser(
+        "astro-controller-accessories",
+        help="Generate Astro Controller accessory parts C, D, and E.",
+    )
+    accessories.add_argument("--output-dir", type=Path)
+    accessories.add_argument("--visible", action="store_true")
+    accessories.add_argument("--dry-run", action="store_true")
+    accessories.add_argument("--validate-only", action="store_true")
+    accessories.add_argument("--json", action="store_true")
+    accessories.add_argument("--lens-r", type=float, default=42.5)
+    accessories.add_argument("--gap", type=float, default=0.5)
+    accessories.add_argument("--back-thk", type=float, default=3.0)
+    accessories.add_argument("--band-w", type=float, default=25.0)
+    accessories.add_argument("--sweep", type=float, default=100.0)
+    accessories.add_argument("--ch-depth", type=float, default=2.0)
+    accessories.add_argument("--knob-d", type=float, default=18.0)
+    accessories.add_argument("--knob-h", type=float, default=15.0)
+    accessories.add_argument("--bore-d", type=float, default=6.2)
+    accessories.add_argument("--bore-depth", type=float, default=10.0)
+    accessories.add_argument("--flat-dist", type=float, default=1.6)
+    accessories.add_argument("--flute-n", type=int, default=12)
+    accessories.add_argument("--flute-d", type=float, default=1.5)
+
+    tracker = subparsers.add_parser(
+        "barn-door-star-tracker",
+        help="Generate Barn-door star tracker parts T1 through T4.",
+    )
+    tracker.add_argument("--output-dir", type=Path)
+    tracker.add_argument("--visible", action="store_true")
+    tracker.add_argument("--dry-run", action="store_true")
+    tracker.add_argument("--validate-only", action="store_true")
+    tracker.add_argument("--json", action="store_true")
+    tracker.add_argument("--tracking-l", type=float, default=200.0)
+    tracker.add_argument("--board-len", type=float, default=215.0)
+    tracker.add_argument("--board-w", type=float, default=90.0)
+    tracker.add_argument("--board-t", type=float, default=6.0)
+    tracker.add_argument("--rib-h", type=float, default=8.0)
+    tracker.add_argument("--pin-d", type=float, default=4.2)
+    tracker.add_argument("--rod-pitch", type=float, default=0.7)
+
+    kit = subparsers.add_parser(
+        "astro-kit-addons",
+        help="Generate Astro Kit add-on parts F through I.",
+    )
+    kit.add_argument("--output-dir", type=Path)
+    kit.add_argument("--visible", action="store_true")
+    kit.add_argument("--dry-run", action="store_true")
+    kit.add_argument("--validate-only", action="store_true")
+    kit.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -126,7 +179,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 def plan_from_args(
     args: argparse.Namespace,
-) -> FeaturePlan | EnclosurePlan | EnclosureAssemblyPlan:
+) -> FeaturePlan | EnclosurePlan | EnclosureAssemblyPlan | MultiPartPlan:
     name = _plan_name(args)
     if args.command == "disk":
         return disk_plan(
@@ -180,14 +233,48 @@ def plan_from_args(
             output=args.output,
             base_h_mm=args.base_h,
         )
+    if args.command == "astro-controller-accessories":
+        return astro_controller_accessory_plans(
+            lens_r=args.lens_r,
+            gap=args.gap,
+            back_thk=args.back_thk,
+            band_w=args.band_w,
+            sweep=args.sweep,
+            ch_depth=args.ch_depth,
+            knob_d=args.knob_d,
+            knob_h=args.knob_h,
+            bore_d=args.bore_d,
+            bore_depth=args.bore_depth,
+            flat_dist=args.flat_dist,
+            flute_n=args.flute_n,
+            flute_d=args.flute_d,
+        )
+    if args.command == "barn-door-star-tracker":
+        return barn_door_star_tracker_plans(
+            tracking_l=args.tracking_l,
+            board_len=args.board_len,
+            board_w=args.board_w,
+            board_t=args.board_t,
+            rib_h=args.rib_h,
+            pin_d=args.pin_d,
+            rod_pitch=args.rod_pitch,
+        )
+    if args.command == "astro-kit-addons":
+        return astro_kit_addon_plans()
     raise ValueError(f"unsupported command: {args.command}")
 
 
 def _plan_name(args: argparse.Namespace) -> str:
-    if args.name:
+    if getattr(args, "name", None):
         return str(args.name)
     if args.command in ("astro-controller-enclosure", "astro-controller-assembly"):
         return "astro_controller_enclosure"
+    if args.command == "astro-controller-accessories":
+        return "astro_controller_accessories"
+    if args.command == "barn-door-star-tracker":
+        return "barn_door_star_tracker"
+    if args.command == "astro-kit-addons":
+        return "astro_kit_addons"
     output = getattr(args, "output", None)
     if output is not None:
         return Path(output).stem
@@ -212,6 +299,8 @@ def run(args: argparse.Namespace) -> int:
                 print(plan.explain())
             elif isinstance(plan, EnclosureAssemblyPlan):
                 print(plan.to_json())
+            elif isinstance(plan, MultiPartPlan):
+                print(plan.explain())
             else:
                 print(
                     plan.explain(
@@ -226,6 +315,9 @@ def run(args: argparse.Namespace) -> int:
         assembly = Assembly.from_plan(app=connect(visible=args.visible), plan=plan)
         assembly.close()
         return 0
+
+    if isinstance(plan, MultiPartPlan):
+        return _run_multipart(args, plan)
 
     if isinstance(plan, EnclosurePlan):
         return _run_enclosure(args, plan)
@@ -274,6 +366,28 @@ def _run_enclosure(args: argparse.Namespace, plan: EnclosurePlan) -> int:
         for part in reversed(parts):
             part.close()
 
+    return 0
+
+
+def _run_multipart(args: argparse.Namespace, plan: MultiPartPlan) -> int:
+    if args.output_dir is None:
+        raise AutodeskPyInventorError(
+            "--output-dir is required unless --dry-run is set."
+        )
+    app = connect(visible=args.visible)
+    parts: list[Part] = []
+    try:
+        for name, part_plan in plan.parts.items():
+            output = args.output_dir / f"{name}.ipt"
+            stl = args.output_dir / f"{name}.stl"
+            part = Part.new(app=app, name=part_plan.name, path=output)
+            parts.append(part)
+            part.execute(part_plan)
+            part.save()
+            part.export_stl(stl)
+    finally:
+        for part in reversed(parts):
+            part.close()
     return 0
 
 

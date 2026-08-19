@@ -168,6 +168,179 @@ class CircleExtrude:
 
 
 @dataclass(frozen=True)
+class OrientedRectangleExtrude:
+    """Extrude a rotated rectangle footprint on the XY plane."""
+
+    width_mm: float
+    height_mm: float
+    x_mm: float
+    y_mm: float
+    z_mm: float
+    length_mm: float
+    angle_deg: float = 0.0
+    operation: FeatureOperation = "join"
+    direction: ExtentDirection = "positive"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "width_mm", positive_mm("width_mm", self.width_mm))
+        object.__setattr__(self, "height_mm", positive_mm("height_mm", self.height_mm))
+        object.__setattr__(self, "x_mm", numeric_mm("x_mm", self.x_mm))
+        object.__setattr__(self, "y_mm", numeric_mm("y_mm", self.y_mm))
+        object.__setattr__(self, "z_mm", numeric_mm("z_mm", self.z_mm))
+        object.__setattr__(self, "length_mm", positive_mm("length_mm", self.length_mm))
+        object.__setattr__(self, "angle_deg", numeric_mm("angle_deg", self.angle_deg))
+        if self.operation not in ("join", "cut"):
+            raise InventorPlanError(f"operation={self.operation!r} must be 'join' or 'cut'.")
+        if self.direction not in ("positive", "negative"):
+            raise InventorPlanError(f"direction={self.direction!r} is unsupported.")
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "type": "oriented_rectangle_extrude",
+            "width": _clean_number(self.width_mm),
+            "height": _clean_number(self.height_mm),
+            "x": _clean_number(self.x_mm),
+            "y": _clean_number(self.y_mm),
+            "z": _clean_number(self.z_mm),
+            "length": _clean_number(self.length_mm),
+            "angle": _clean_number(self.angle_deg),
+            "operation": self.operation,
+            "direction": self.direction,
+        }
+
+
+@dataclass(frozen=True)
+class PolygonExtrude:
+    """Extrude a regular polygon footprint on the XY plane."""
+
+    sides: int
+    circumradius_mm: float
+    x_mm: float
+    y_mm: float
+    z_mm: float
+    length_mm: float
+    rotation_deg: float = 0.0
+    operation: FeatureOperation = "cut"
+    plane: PlaneName = "XY"
+    direction: ExtentDirection = "positive"
+
+    def __post_init__(self) -> None:
+        if isinstance(self.sides, bool) or self.sides < 3:
+            raise InventorValidationError("sides must be at least 3.")
+        object.__setattr__(self, "circumradius_mm", positive_mm("circumradius_mm", self.circumradius_mm))
+        object.__setattr__(self, "x_mm", numeric_mm("x_mm", self.x_mm))
+        object.__setattr__(self, "y_mm", numeric_mm("y_mm", self.y_mm))
+        object.__setattr__(self, "z_mm", numeric_mm("z_mm", self.z_mm))
+        object.__setattr__(self, "length_mm", positive_mm("length_mm", self.length_mm))
+        object.__setattr__(self, "rotation_deg", numeric_mm("rotation_deg", self.rotation_deg))
+        if self.operation not in ("join", "cut"):
+            raise InventorPlanError(f"operation={self.operation!r} must be 'join' or 'cut'.")
+        if self.plane not in ("XY", "YZ", "XZ"):
+            raise InventorPlanError(f"plane={self.plane!r} is unsupported.")
+        if self.direction not in ("positive", "negative"):
+            raise InventorPlanError(f"direction={self.direction!r} is unsupported.")
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "type": "polygon_extrude",
+            "sides": self.sides,
+            "circumradius": _clean_number(self.circumradius_mm),
+            "x": _clean_number(self.x_mm),
+            "y": _clean_number(self.y_mm),
+            "z": _clean_number(self.z_mm),
+            "length": _clean_number(self.length_mm),
+            "rotation": _clean_number(self.rotation_deg),
+            "operation": self.operation,
+            "plane": self.plane,
+            "direction": self.direction,
+        }
+
+
+@dataclass(frozen=True)
+class AnnularSectorExtrude:
+    """Extrude an annular sector on the XY plane."""
+
+    inner_radius_mm: float
+    outer_radius_mm: float
+    start_angle_deg: float
+    end_angle_deg: float
+    z_mm: float
+    length_mm: float
+    operation: FeatureOperation = "join"
+    direction: ExtentDirection = "positive"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "inner_radius_mm", positive_mm("inner_radius_mm", self.inner_radius_mm))
+        object.__setattr__(self, "outer_radius_mm", positive_mm("outer_radius_mm", self.outer_radius_mm))
+        object.__setattr__(self, "start_angle_deg", numeric_mm("start_angle_deg", self.start_angle_deg))
+        object.__setattr__(self, "end_angle_deg", numeric_mm("end_angle_deg", self.end_angle_deg))
+        object.__setattr__(self, "z_mm", numeric_mm("z_mm", self.z_mm))
+        object.__setattr__(self, "length_mm", positive_mm("length_mm", self.length_mm))
+        if self.outer_radius_mm <= self.inner_radius_mm:
+            raise InventorValidationError("outer radius must be greater than inner radius.")
+        sweep = self.end_angle_deg - self.start_angle_deg
+        if sweep <= 0 or sweep >= 360:
+            raise InventorValidationError("sector angle must be between 0 and 360 degrees.")
+        if self.operation not in ("join", "cut"):
+            raise InventorPlanError(f"operation={self.operation!r} must be 'join' or 'cut'.")
+        if self.direction not in ("positive", "negative"):
+            raise InventorPlanError(f"direction={self.direction!r} is unsupported.")
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "type": "annular_sector_extrude",
+            "inner_radius": _clean_number(self.inner_radius_mm),
+            "outer_radius": _clean_number(self.outer_radius_mm),
+            "start_angle": _clean_number(self.start_angle_deg),
+            "end_angle": _clean_number(self.end_angle_deg),
+            "z": _clean_number(self.z_mm),
+            "length": _clean_number(self.length_mm),
+            "operation": self.operation,
+            "direction": self.direction,
+        }
+
+
+@dataclass(frozen=True)
+class ProfileExtrude:
+    """Extrude an arbitrary closed polygon on a principal work plane."""
+
+    points: tuple[tuple[float, float], ...]
+    plane: PlaneName
+    offset_mm: float
+    length_mm: float
+    operation: FeatureOperation = "join"
+    direction: ExtentDirection = "positive"
+
+    def __post_init__(self) -> None:
+        if len(self.points) < 3:
+            raise InventorValidationError("ProfileExtrude requires at least three points.")
+        object.__setattr__(
+            self,
+            "points",
+            tuple((numeric_mm("profile_x", x), numeric_mm("profile_y", y)) for x, y in self.points),
+        )
+        object.__setattr__(self, "offset_mm", numeric_mm("offset_mm", self.offset_mm))
+        object.__setattr__(self, "length_mm", positive_mm("length_mm", self.length_mm))
+        if self.plane not in ("XY", "YZ", "XZ"):
+            raise InventorPlanError(f"plane={self.plane!r} is unsupported.")
+        if self.operation not in ("join", "cut"):
+            raise InventorPlanError(f"operation={self.operation!r} must be 'join' or 'cut'.")
+        if self.direction not in ("positive", "negative"):
+            raise InventorPlanError(f"direction={self.direction!r} is unsupported.")
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "type": "profile_extrude",
+            "points": [[_clean_number(x), _clean_number(y)] for x, y in self.points],
+            "plane": self.plane,
+            "offset": _clean_number(self.offset_mm),
+            "length": _clean_number(self.length_mm),
+            "operation": self.operation,
+            "direction": self.direction,
+        }
+
+
+@dataclass(frozen=True)
 class Shell:
     """Create a top-open tray by cutting the inner cavity from an outer box."""
 
@@ -230,6 +403,10 @@ Operation: TypeAlias = (
     | ApplyDeferredBores
     | RectangleExtrude
     | CircleExtrude
+    | OrientedRectangleExtrude
+    | PolygonExtrude
+    | AnnularSectorExtrude
+    | ProfileExtrude
     | Shell
 )
 
@@ -315,6 +492,53 @@ class EnclosurePlan:
         if not isinstance(raw, dict):
             raise InventorPlanError("EnclosurePlan JSON must decode to an object.")
         return cls.from_dict(raw)
+
+
+@dataclass
+class MultiPartPlan:
+    """A named collection of independent part plans."""
+
+    name: str
+    parts: dict[str, FeaturePlan]
+    parameters: dict[str, float] = field(default_factory=dict)
+    units: Literal["mm"] = PUBLIC_UNIT
+
+    def __post_init__(self) -> None:
+        self.name = self.name.strip()
+        if not self.name:
+            raise InventorPlanError("MultiPartPlan name must not be empty.")
+        if not self.parts:
+            raise InventorPlanError("MultiPartPlan requires at least one part.")
+        if self.units != PUBLIC_UNIT:
+            raise InventorPlanError(f"MultiPartPlan units={self.units!r} must be 'mm'.")
+        self.parameters = {str(key): float(value) for key, value in self.parameters.items()}
+        self.validate()
+
+    def validate(self) -> None:
+        for part in self.parts.values():
+            part.validate()
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        self.validate()
+        return {
+            "name": self.name,
+            "units": self.units,
+            "parameters": {key: _clean_number(value) for key, value in self.parameters.items()},
+            "parts": {name: part.to_dict() for name, part in self.parts.items()},
+        }
+
+    def to_json(self, *, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent)
+
+    def explain(self) -> str:
+        self.validate()
+        sections = [
+            f"MultiPartPlan: {self.name}",
+            f"parameters: {json.dumps(self.to_dict()['parameters'], sort_keys=True)}",
+        ]
+        for name, part in self.parts.items():
+            sections.extend([f"[{name}]", part.explain(include_save=True)])
+        return "\n\n".join(sections)
 
 
 @dataclass
@@ -414,7 +638,15 @@ class FeaturePlan:
                         "apply_deferred_bores requires a deferred_center_bore first."
                     )
                 applied = True
-            elif isinstance(operation, RectangleExtrude | CircleExtrude):
+            elif isinstance(
+                operation,
+                RectangleExtrude
+                | CircleExtrude
+                | OrientedRectangleExtrude
+                | PolygonExtrude
+                | AnnularSectorExtrude
+                | ProfileExtrude,
+            ):
                 if operation.operation == "cut" and not saw_solid:
                     raise InventorPlanError(f"operation {index} cut requires a preceding solid.")
                 if operation.operation == "join":
@@ -542,6 +774,61 @@ class FeaturePlan:
                     f"{operation_number}. extrude_{operation.operation}("
                     f"distance={_format_number(operation.length_mm)}, "
                     f'direction="{operation.direction}")'
+                )
+                operation_number += 1
+            elif isinstance(operation, OrientedRectangleExtrude):
+                lines.append(
+                    "  "
+                    f"{operation_number}. sketch_oriented_rectangle(center=({operation.x_mm:g},"
+                    f"{operation.y_mm:g}), angle={operation.angle_deg:g}, "
+                    f"width={operation.width_mm:g}, height={operation.height_mm:g})"
+                )
+                operation_number += 1
+                lines.append(
+                    "  "
+                    f"{operation_number}. extrude_{operation.operation}("
+                    f"distance={operation.length_mm:g}, direction=\"{operation.direction}\")"
+                )
+                operation_number += 1
+            elif isinstance(operation, PolygonExtrude):
+                lines.append(
+                    "  "
+                    f"{operation_number}. sketch_polygon(sides={operation.sides}, "
+                    f"center=({operation.x_mm:g},{operation.y_mm:g}), "
+                    f"radius={operation.circumradius_mm:g}, rotation={operation.rotation_deg:g})"
+                )
+                operation_number += 1
+                lines.append(
+                    "  "
+                    f"{operation_number}. extrude_{operation.operation}("
+                    f"distance={operation.length_mm:g}, direction=\"{operation.direction}\")"
+                )
+                operation_number += 1
+            elif isinstance(operation, AnnularSectorExtrude):
+                lines.append(
+                    "  "
+                    f"{operation_number}. sketch_annular_sector(inner={operation.inner_radius_mm:g}, "
+                    f"outer={operation.outer_radius_mm:g}, angles=({operation.start_angle_deg:g},"
+                    f"{operation.end_angle_deg:g}))"
+                )
+                operation_number += 1
+            elif isinstance(operation, ProfileExtrude):
+                lines.append(
+                    "  "
+                    f"{operation_number}. sketch_profile(plane=\"{operation.plane}\", "
+                    f"points={len(operation.points)}, offset={operation.offset_mm:g})"
+                )
+                operation_number += 1
+                lines.append(
+                    "  "
+                    f"{operation_number}. extrude_{operation.operation}("
+                    f"distance={operation.length_mm:g}, direction=\"{operation.direction}\")"
+                )
+                operation_number += 1
+                lines.append(
+                    "  "
+                    f"{operation_number}. extrude_{operation.operation}("
+                    f"distance={operation.length_mm:g}, direction=\"{operation.direction}\")"
                 )
                 operation_number += 1
             elif isinstance(operation, Shell):
@@ -672,6 +959,59 @@ def operation_from_dict(data: Mapping[str, JsonValue]) -> Operation:
             length_mm=float(_required_number(data, "length")),
             operation=cast(FeatureOperation, data.get("operation", "cut")),
             plane=cast(PlaneName, data.get("plane", "XY")),
+            direction=cast(ExtentDirection, data.get("direction", "positive")),
+        )
+    if operation_type == "oriented_rectangle_extrude":
+        return OrientedRectangleExtrude(
+            width_mm=float(_required_number(data, "width")),
+            height_mm=float(_required_number(data, "height")),
+            x_mm=float(_required_number(data, "x")),
+            y_mm=float(_required_number(data, "y")),
+            z_mm=float(_required_number(data, "z")),
+            length_mm=float(_required_number(data, "length")),
+            angle_deg=float(_required_number(data, "angle")),
+            operation=cast(FeatureOperation, data.get("operation", "join")),
+            direction=cast(ExtentDirection, data.get("direction", "positive")),
+        )
+    if operation_type == "polygon_extrude":
+        return PolygonExtrude(
+            sides=int(_required_number(data, "sides")),
+            circumradius_mm=float(_required_number(data, "circumradius")),
+            x_mm=float(_required_number(data, "x")),
+            y_mm=float(_required_number(data, "y")),
+            z_mm=float(_required_number(data, "z")),
+            length_mm=float(_required_number(data, "length")),
+            rotation_deg=float(_required_number(data, "rotation")),
+            operation=cast(FeatureOperation, data.get("operation", "cut")),
+            plane=cast(PlaneName, data.get("plane", "XY")),
+            direction=cast(ExtentDirection, data.get("direction", "positive")),
+        )
+    if operation_type == "annular_sector_extrude":
+        return AnnularSectorExtrude(
+            inner_radius_mm=float(_required_number(data, "inner_radius")),
+            outer_radius_mm=float(_required_number(data, "outer_radius")),
+            start_angle_deg=float(_required_number(data, "start_angle")),
+            end_angle_deg=float(_required_number(data, "end_angle")),
+            z_mm=float(_required_number(data, "z")),
+            length_mm=float(_required_number(data, "length")),
+            operation=cast(FeatureOperation, data.get("operation", "join")),
+            direction=cast(ExtentDirection, data.get("direction", "positive")),
+        )
+    if operation_type == "profile_extrude":
+        raw_points = data.get("points")
+        if not isinstance(raw_points, list):
+            raise InventorPlanError("ProfileExtrude points must be a list.")
+        points: list[tuple[float, float]] = []
+        for point in raw_points:
+            if not isinstance(point, list) or len(point) != 2:
+                raise InventorPlanError("ProfileExtrude points must contain coordinate pairs.")
+            points.append((float(_required_number({"value": point[0]}, "value")), float(_required_number({"value": point[1]}, "value"))))
+        return ProfileExtrude(
+            points=tuple(points),
+            plane=cast(PlaneName, data.get("plane", "XY")),
+            offset_mm=float(_required_number(data, "offset")),
+            length_mm=float(_required_number(data, "length")),
+            operation=cast(FeatureOperation, data.get("operation", "join")),
             direction=cast(ExtentDirection, data.get("direction", "positive")),
         )
     if operation_type == "shell":
