@@ -69,6 +69,8 @@ class InventorBackend:
 
         pythoncom.CoInitialize()
 
+        # 1) Reuse an already-running Inventor instance if one exists (fast, avoids
+        #    spawning a second copy of the application).
         app = None
         try:
             app = win32_client.GetActiveObject(INVENTOR_PROG_ID)
@@ -77,10 +79,13 @@ class InventorBackend:
             app = None
 
         if app is None:
+            # 2) Launch a new instance via the cached type library (gives named constants).
             try:
                 app = win32_client.gencache.EnsureDispatch(INVENTOR_PROG_ID)
                 INV = win32_client.constants
             except Exception as ensure_exc:
+                # 3) Fall back to late-bound dispatch if the gen_py cache is broken/stale;
+                #    named constants aren't available here, so use our own fallback enum.
                 try:
                     app = win32_client.dynamic.Dispatch(INVENTOR_PROG_ID)
                     INV = _inventor_fallback_constants()
@@ -138,6 +143,8 @@ class InventorBackend:
     def execute_plan(self, document: Any, plan: FeaturePlan) -> None:
         plan.validate()
         self._add_user_parameters(document, plan.parameters)
+        # A center bore is recorded but not cut until ApplyDeferredBores runs, so it can
+        # be sized against the smallest outer cylinder joined earlier in the same plan.
         deferred_bore: DeferredCenterBore | None = None
         bindings = {binding.operation_index: binding for binding in plan.parameter_bindings}
         for operation_index, operation in enumerate(plan.operations):

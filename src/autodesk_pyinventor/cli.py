@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # Diagnose Python/pywin32/Inventor readiness before running any real command.
     doctor = subparsers.add_parser("doctor", help="Check local Autodesk Inventor readiness.")
     doctor.add_argument(
         "--strict",
@@ -44,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Return exit code 1 when any readiness check fails.",
     )
 
+    # Simple single-part recipes: disk/washer, tube, flanged tube.
     disk = subparsers.add_parser("disk", help="Generate a disk, optionally with a center bore.")
     _add_common_args(disk)
     disk.add_argument("--od", type=float, required=True)
@@ -71,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     flanged.add_argument("--flange-thickness", type=float, required=True)
     flanged.add_argument("--flange-z", type=float, default=0)
 
+    # Astro Controller project: enclosure (base + lid), assembly, and accessories.
     enclosure = subparsers.add_parser(
         "astro-controller-enclosure",
         help="Generate the Astro Controller Base and Lid enclosure parts.",
@@ -137,6 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     accessories.add_argument("--flute-n", type=int, default=12)
     accessories.add_argument("--flute-d", type=float, default=1.5)
 
+    # Astro Kit project: barn-door star tracker and its add-on parts.
     tracker = subparsers.add_parser(
         "barn-door-star-tracker",
         help="Generate Barn-door star tracker parts T1 through T4.",
@@ -180,6 +184,8 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 def plan_from_args(
     args: argparse.Namespace,
 ) -> FeaturePlan | EnclosurePlan | EnclosureAssemblyPlan | MultiPartPlan:
+    # Builds a declarative plan for the chosen subcommand; this always succeeds offline
+    # (no Inventor connection), so it also backs --dry-run.
     name = _plan_name(args)
     if args.command == "disk":
         return disk_plan(
@@ -289,6 +295,7 @@ def run(args: argparse.Namespace) -> int:
 
     plan = plan_from_args(args)
 
+    # --dry-run / --validate-only never touch Inventor: they only print or validate the plan.
     if args.dry_run or getattr(args, "validate_only", False):
         if args.json:
             print(plan.to_json())
@@ -392,6 +399,8 @@ def _run_multipart(args: argparse.Namespace, plan: MultiPartPlan) -> int:
 
 
 def run_doctor(*, strict: bool = False) -> int:
+    # Runs a sequence of best-effort checks (OS, Python, pywin32, live Inventor COM
+    # connection, template lookup, writable cwd) and prints a pass/fail line for each.
     lines = ["AutodeskPyInventor doctor", ""]
     checks: list[bool] = []
 

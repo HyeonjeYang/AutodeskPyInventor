@@ -25,3 +25,10 @@ OldVersions/
 *.sat
 *.dwg
 *.dxf
+
+# Only track the micro_drone_project example; ignore any other/future project folders
+projects/*
+!projects/micro_drone_project
+
+# Personal local-only scratch scripts (keep scripts/ versions instead)
+/create_full_archive.py

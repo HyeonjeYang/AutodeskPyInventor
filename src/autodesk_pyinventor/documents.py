@@ -84,6 +84,8 @@ def find_standard_part_template(
             f"Template not found at {template_path}. Pass --template C:\\path\\to\\Standard.ipt."
         )
 
+    # Prefer Inventor's own configured default template, then fall back to scanning
+    # the project's template folders for a metric Standard.ipt-like file.
     file_manager_template = _template_from_file_manager(app, constants)
     if file_manager_template is not None:
         return file_manager_template
