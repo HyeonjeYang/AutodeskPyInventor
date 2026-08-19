@@ -48,9 +48,6 @@ autodesk-pyinventor disk --od 80 --id 25 --thickness 8 --dry-run --json
 | `disk` / `washer` | Generate solid disks or bored washers |
 | `tube` | Generate straight hollow tubes |
 | `flanged-tube` | Generate tubes with mounting flanges |
-| `astro-controller-enclosure` | Parametric enclosure with OLED/encoder cutouts |
-| `astro-controller-assembly` | Assemble enclosure base & lid into one `.iam` |
-| `astro-controller-accessories` | Generate accessory parts for the Astro Controller |
 | `barn-door-star-tracker` | Generate a barn-door star tracker part set |
 | `astro-kit-addons` | Generate add-on parts for the Astro Kit |
 
