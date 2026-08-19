@@ -127,3 +127,21 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) if `doctor` reports a pro
 MIT License. Copyright (c) 2026 HyeonjeYang.
 
 *Not affiliated with, endorsed by, or sponsored by Autodesk, Inc. Autodesk and Autodesk Inventor are registered trademarks of Autodesk, Inc.*
+
+---
+
+## Future Directions
+
+### 1. Advanced Geometric Features (Expanding Expressive Power)
+* **`RevolveFeature`**: 360° rotational extrusions around axes for axisymmetric components (engine nozzles, shafts, rounded housings, bushings).
+* **`Loft` & `Sweep`**: Smooth cross-sectional morphing (e.g., square-to-round aerodynamic ducting) and path-following sweeps for complex tubing/wiring conduits.
+* **`Fillet` & `Chamfer`**: Declarative edge-blending operations for automated stress-concentration relief and ergonomic surface finishing.
+* **`CircularPattern` & `RectangularPattern`**: High-performance feature replication (e.g., bolt circles, multi-arm drone frames, gear teeth) without manual coordinate trigonometry.
+
+### 2. Native Simulation & FEA Automation
+* **Autodesk Inventor `StressAnalysis` / Nastran COM Integration**: Direct COM triggers for automated tetrahedral meshing, boundary constraint application, 3D von Mises stress tensor solving, and headless screenshot rendering of color stress heatmaps.
+* **Automated Generative Optimization Loops**: Autonomous CAD -> FEA -> Geometry Reinforcement -> Re-verification loops driven by AI Coding Agents.
+
+### 3. Advanced Multi-Component Assembly Engine
+* **Generalized 3D Assembly Constraints**: Declarative `Mate`, `Flush`, `Insert`, and `Tangent` joints with 6-DOF spatial matrix transformations.
+* **Automated Clearance & Interference Checking**: Programmatic collision detection between rotating parts (e.g., propeller-to-duct clearance verification).
