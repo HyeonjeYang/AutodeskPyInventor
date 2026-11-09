@@ -110,6 +110,7 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) if `doctor` reports a pro
 - [examples/](examples/) — short single-file usage scripts.
 - [projects/micro_drone_project/](projects/micro_drone_project/) — a full demo build (multi-part, assembly, print guide).
 - [docs/](docs/) — design notes, Inventor COM quirks, troubleshooting, architecture notes.
+- [AGENTS.md](AGENTS.md) — working rules for AI coding agents (verification, Inventor sessions).
 - [tests/](tests/) — `unit/` (no Inventor required) and `integration/` (opt-in, needs Inventor).
 
 ---

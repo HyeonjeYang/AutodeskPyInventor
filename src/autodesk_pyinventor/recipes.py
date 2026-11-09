@@ -9,6 +9,7 @@ from .plan import (
     ApplyDeferredBores,
     AnnularSectorExtrude,
     CircleExtrude,
+    CircularEdgeChamfer,
     DeferredCenterBore,
     EnclosurePlan,
     ExtentDirection,
@@ -1615,6 +1616,124 @@ def astro_kit_addon_plans() -> MultiPartPlan:
     for part in parts.values():
         parameters.update(part.parameters)
     return MultiPartPlan(name="astro_kit_addons", parts=parts, parameters=parameters)
+
+
+def socket_depth_from_port_length(port_length: Real, *, clearance: Real = 1.0) -> float:
+    """Return a dust-cap socket depth for a measured rear-port protrusion.
+
+    ``port_length`` is measured from the shoulder the cap rim seats against to the
+    end of the port. ``clearance`` keeps the cap floor off the port end.
+    """
+
+    return positive_mm("port_length", port_length) + non_negative_mm("clearance", clearance)
+
+
+def meade_lx50_rear_dust_cap_plan(
+    *,
+    name: str = "meade_lx50_rear_dust_cap",
+    bore_id_mm: Real = 51.60,
+    socket_depth_mm: Real = 9.00,
+    cap_od_mm: Real = 57.15,
+    end_wall_mm: Real = 2.50,
+    entry_chamfer_mm: Real = 0.75,
+    thread_od_mm: Real = 50.80,
+    tape_width_mm: Real = 10.0,
+    tape_depth_mm: Real = 4.0,
+    tape_inset_mm: Real = 1.0,
+    tape_pad_count: int = 3,
+) -> FeaturePlan:
+    """Plan a closed-end, smooth-bore slip-on dust cap for a 2" SCT rear port.
+
+    Defaults fit the Meade LX50 rear cell (2"-24 male thread, 50.80 mm nominal OD).
+    The open end is at z = 0 with a 45 degree entry chamfer, the bore runs
+    ``socket_depth_mm`` down to a flat floor, and the closed end face lies flat at
+    z = -(end_wall_mm + socket_depth_mm): print that face on the bed, opening up.
+
+    The bore is a plain cylinder so electrical-tape fit pads can be stuck to it:
+    ``tape_pad_count`` evenly spaced pads of ``tape_width_mm`` (around) by
+    ``tape_depth_mm`` (axial), starting ``tape_inset_mm`` below the rim. Validation
+    keeps every pad on the straight wall, below the chamfer and above the floor.
+    """
+
+    import math
+
+    bore = positive_mm("bore_id_mm", bore_id_mm)
+    depth = positive_mm("socket_depth_mm", socket_depth_mm)
+    outer = positive_mm("cap_od_mm", cap_od_mm)
+    end_wall = positive_mm("end_wall_mm", end_wall_mm)
+    chamfer = positive_mm("entry_chamfer_mm", entry_chamfer_mm)
+    thread = positive_mm("thread_od_mm", thread_od_mm)
+    pad_width = positive_mm("tape_width_mm", tape_width_mm)
+    pad_depth = positive_mm("tape_depth_mm", tape_depth_mm)
+    pad_inset = non_negative_mm("tape_inset_mm", tape_inset_mm)
+    pad_count_is_int = isinstance(tape_pad_count, int) and not isinstance(tape_pad_count, bool)
+    if not pad_count_is_int or tape_pad_count < 1:
+        raise InventorValidationError("tape_pad_count must be a positive integer.")
+
+    ensure_outer_greater_than_inner("bore_id_mm", bore, "thread_od_mm", thread)
+    entry_diameter = bore + 2 * chamfer
+    ensure_outer_greater_than_inner("cap_od_mm", outer, "entry chamfer diameter", entry_diameter)
+    if pad_inset < chamfer:
+        raise InventorValidationError(
+            f"tape_inset_mm={pad_inset:g} must be at least entry_chamfer_mm={chamfer:g} "
+            "so the tape sits on the straight bore wall."
+        )
+    if pad_inset + pad_depth > depth:
+        raise InventorValidationError(
+            f"tape zone ends {pad_inset + pad_depth:g} mm deep, past "
+            f"socket_depth_mm={depth:g}."
+        )
+    if tape_pad_count * pad_width >= math.pi * bore:
+        raise InventorValidationError(
+            f"{tape_pad_count} tape pads of {pad_width:g} mm do not fit around the bore."
+        )
+
+    operations: list[Operation] = [
+        CircleExtrude(
+            diameter_mm=outer,
+            x_mm=0,
+            y_mm=0,
+            z_mm=0,
+            length_mm=end_wall + depth,
+            operation="join",
+            direction="negative",
+        ),
+        CircleExtrude(
+            diameter_mm=bore,
+            x_mm=0,
+            y_mm=0,
+            z_mm=0,
+            length_mm=depth,
+            operation="cut",
+            direction="negative",
+        ),
+        CircularEdgeChamfer(edge_diameter_mm=bore, z_mm=0, distance_mm=chamfer),
+    ]
+    # Every feature is sketched on the origin XY plane, so the Inventor user
+    # parameters below drive the saved .ipt without stale offset work planes.
+    bindings = [
+        ParameterBinding(0, "diameter", "cap_od_mm"),
+        ParameterBinding(0, "extent", "end_wall_mm + socket_depth_mm"),
+        ParameterBinding(1, "diameter", "bore_id_mm"),
+        ParameterBinding(1, "extent", "socket_depth_mm"),
+        ParameterBinding(2, "distance", "entry_chamfer_mm"),
+    ]
+    return FeaturePlan(
+        name=name,
+        operations=operations,
+        parameters={
+            "bore_id_mm": bore,
+            "socket_depth_mm": depth,
+            "cap_od_mm": outer,
+            "end_wall_mm": end_wall,
+            "entry_chamfer_mm": chamfer,
+            "thread_od_mm": thread,
+            "tape_width_mm": pad_width,
+            "tape_depth_mm": pad_depth,
+            "tape_inset_mm": pad_inset,
+        },
+        parameter_bindings=bindings,
+    )
 
 
 def micro_drone_frame_plan(

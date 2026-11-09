@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import pytest
-
-import autodesk_pyinventor as api
-
 
 pytestmark = pytest.mark.skipif(
     os.name != "nt" or os.getenv("AUTODESK_PYINVENTOR_RUN_INTEGRATION") != "1",
@@ -14,7 +12,5 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.inventor
-def test_inventor_connection() -> None:
-    app = api.connect(visible=False)
-
-    assert app.raw is not None
+def test_inventor_connection(inventor_app: Any) -> None:
+    assert inventor_app.raw is not None

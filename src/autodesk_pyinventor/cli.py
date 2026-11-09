@@ -7,11 +7,13 @@ import os
 import platform
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Sequence, cast
 
-from .app import connect
+from .app import InventorApp, connect
 from .assembly import Assembly, EnclosureAssemblyPlan
 from .constants import WINDOWS_OS_NAME
 from .documents import find_standard_part_template
@@ -319,8 +321,9 @@ def run(args: argparse.Namespace) -> int:
 
     if isinstance(plan, EnclosureAssemblyPlan):
         plan.validate_for_execution()
-        assembly = Assembly.from_plan(app=connect(visible=args.visible), plan=plan)
-        assembly.close()
+        with _inventor_session(visible=args.visible) as app:
+            assembly = Assembly.from_plan(app=app, plan=plan)
+            assembly.close()
         return 0
 
     if isinstance(plan, MultiPartPlan):
@@ -332,16 +335,35 @@ def run(args: argparse.Namespace) -> int:
     if args.output is None:
         raise AutodeskPyInventorError("--output is required unless --dry-run is set.")
 
-    app = connect(visible=args.visible)
-    part = Part.from_plan(app=app, plan=plan, path=args.output, template=args.template)
-    try:
-        part.save()
-        if args.stl is not None:
-            part.export_stl(args.stl)
-    finally:
-        part.close()
+    with _inventor_session(visible=args.visible) as app:
+        part = Part.from_plan(app=app, plan=plan, path=args.output, template=args.template)
+        try:
+            part.save()
+            if args.stl is not None:
+                part.export_stl(args.stl)
+        finally:
+            part.close()
 
     return 0
+
+
+@contextmanager
+def _inventor_session(*, visible: bool) -> Iterator[InventorApp]:
+    """Connect to Inventor and quit it afterwards if this run started it hidden.
+
+    A hidden Inventor launched over COM cannot be reused by the next run and keeps
+    running after Python exits. A reused or visible session is left alone.
+    """
+
+    app = connect(visible=visible)
+    try:
+        yield app
+    finally:
+        if not visible:
+            try:
+                app.quit_if_launched()
+            except AutodeskPyInventorError as exc:
+                print(f"warning: {exc}", file=sys.stderr)
 
 
 def _run_enclosure(args: argparse.Namespace, plan: EnclosurePlan) -> int:
@@ -350,7 +372,11 @@ def _run_enclosure(args: argparse.Namespace, plan: EnclosurePlan) -> int:
             "--base-output and --lid-output are required unless --dry-run is set."
         )
 
-    app = connect(visible=args.visible)
+    with _inventor_session(visible=args.visible) as app:
+        return _build_enclosure(app, args, plan)
+
+
+def _build_enclosure(app: InventorApp, args: argparse.Namespace, plan: EnclosurePlan) -> int:
     parts: list[Part] = []
     documents = [
         (plan.base, args.base_output, args.base_stl),
@@ -381,7 +407,11 @@ def _run_multipart(args: argparse.Namespace, plan: MultiPartPlan) -> int:
         raise AutodeskPyInventorError(
             "--output-dir is required unless --dry-run is set."
         )
-    app = connect(visible=args.visible)
+    with _inventor_session(visible=args.visible) as app:
+        return _build_multipart(app, args, plan)
+
+
+def _build_multipart(app: InventorApp, args: argparse.Namespace, plan: MultiPartPlan) -> int:
     parts: list[Part] = []
     try:
         for name, part_plan in plan.parts.items():
@@ -434,7 +464,13 @@ def run_doctor(*, strict: bool = False) -> int:
 
     app: Any | None = None
     constants: Any | None = None
+    already_running = False
     if is_windows and win32_client is not None:
+        try:
+            win32_client.GetActiveObject("Inventor.Application")
+            already_running = True
+        except Exception:
+            already_running = False
         try:
             app = win32_client.gencache.EnsureDispatch("Inventor.Application")
             constants = win32_client.constants
@@ -490,6 +526,14 @@ def run_doctor(*, strict: bool = False) -> int:
         _cwd_is_writable(),
         "Current directory is not writable. Choose another output directory.",
     )
+
+    # The check above started a hidden Inventor if none was running; do not leave it behind.
+    if app is not None and not already_running:
+        try:
+            if not bool(app.Visible):
+                app.Quit()
+        except Exception:
+            pass
 
     print("\n".join(lines))
     return 1 if strict and not all(checks) else 0

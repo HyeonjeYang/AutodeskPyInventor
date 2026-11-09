@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,8 +16,8 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.inventor
-def test_inventor_tube(inventor_tmp_path: Path) -> None:
-    app = api.connect(visible=False)
+def test_inventor_tube(inventor_app: Any, inventor_tmp_path: Path) -> None:
+    app = inventor_app
     path = inventor_tmp_path / "tube.ipt"
     part = api.Part.new(app=app, name="tube", path=path)
 

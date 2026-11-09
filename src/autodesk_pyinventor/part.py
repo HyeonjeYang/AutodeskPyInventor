@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .app import InventorApp
 from .exceptions import InventorPlanError
@@ -128,12 +128,19 @@ class Part:
             raise InventorPlanError("Cannot save a part without an Inventor document.")
         self.app.backend.save_document(self.document)
 
-    def export_stl(self, path: str | Path) -> None:
+    def export_stl(
+        self,
+        path: str | Path,
+        *,
+        resolution: Literal["high", "medium", "low"] = "high",
+    ) -> None:
+        """Export a binary STL in millimeters (see ``InventorBackend.export_stl``)."""
+
         if self.document is None:
             self.execute()
         if self.app is None or self.document is None:
             raise InventorPlanError("Cannot export a part without an Inventor document.")
-        self.app.backend.export_stl(self.document, path)
+        self.app.backend.export_stl(self.document, path, resolution=resolution)
 
     def close(self, *, save_changes: bool = False) -> None:
         if self.app is None or self.document is None:

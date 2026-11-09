@@ -3,20 +3,28 @@
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from .constants import (
     ASSEMBLY_DOCUMENT_TYPE,
+    CIRCLE_CURVE_TYPE,
     CUT_OPERATION,
+    FILE_BROWSE_IO_MECHANISM,
     INVENTOR_PROG_ID,
     JOIN_OPERATION,
+    NEGATIVE_EXTENT_DIRECTION,
     PART_DOCUMENT_TYPE,
     POSITIVE_EXTENT_DIRECTION,
+    STL_EXPORT_UNITS_MM,
+    STL_RESOLUTION_VALUES,
     STL_SUFFIX,
+    STL_TRANSLATOR_ADDIN_ID,
+    SYMMETRIC_EXTENT_DIRECTION,
     WINDOWS_OS_NAME,
     XY_WORK_PLANE_INDEX,
 )
@@ -34,10 +42,12 @@ from .plan import (
     ApplyDeferredBores,
     AnnularSectorExtrude,
     CircleExtrude,
+    CircularEdgeChamfer,
     DeferredCenterBore,
     FeaturePlan,
     OuterCylinder,
     OrientedRectangleExtrude,
+    ParameterBinding,
     PolygonExtrude,
     ProfileExtrude,
     RectangleExtrude,
@@ -53,6 +63,8 @@ class InventorBackend:
 
     app: Any
     constants: Any
+    # True when connect() started this Inventor process rather than reusing one.
+    launched: bool = False
 
     @classmethod
     def connect(cls, *, visible: bool = True) -> "InventorBackend":
@@ -78,6 +90,7 @@ class InventorBackend:
         except Exception:
             app = None
 
+        launched = app is None
         if app is None:
             # 2) Launch a new instance via the cached type library (gives named constants).
             try:
@@ -96,14 +109,35 @@ class InventorBackend:
                     ) from dynamic_exc
 
         try:
-            app.Visible = visible
+            # A reused session belongs to the user: it may be shown, never hidden.
+            if launched or visible:
+                app.Visible = visible
         except Exception as exc:
             raise InventorConnectionError(
                 "Connected to Inventor, but could not set visibility. "
                 f"Original COM error: {exc}"
             ) from exc
 
-        return cls(app=app, constants=INV)
+        return cls(app=app, constants=INV, launched=launched)
+
+    def quit_if_launched(self) -> bool:
+        """Quit Inventor only if this connection started it; never quit a reused session.
+
+        A hidden Inventor started through COM is not registered for GetActiveObject, so
+        later connections cannot reuse it, and it keeps running after Python exits.
+        """
+
+        if not self.launched:
+            return False
+        try:
+            self.app.Quit()
+        except Exception as exc:
+            raise InventorConnectionError(
+                f"Could not quit the Inventor instance this connection started. "
+                f"Original COM error: {exc}"
+            ) from exc
+        self.launched = False
+        return True
 
     def new_part_document(
         self,
@@ -146,7 +180,10 @@ class InventorBackend:
         # A center bore is recorded but not cut until ApplyDeferredBores runs, so it can
         # be sized against the smallest outer cylinder joined earlier in the same plan.
         deferred_bore: DeferredCenterBore | None = None
-        bindings = {binding.operation_index: binding for binding in plan.parameter_bindings}
+        # One operation may carry several bindings (e.g. a circle's diameter and extent).
+        bindings: dict[int, list[ParameterBinding]] = {}
+        for binding in plan.parameter_bindings:
+            bindings.setdefault(binding.operation_index, []).append(binding)
         for operation_index, operation in enumerate(plan.operations):
             feature: Any | None = None
             if isinstance(operation, OuterCylinder):
@@ -174,9 +211,10 @@ class InventorBackend:
                 feature = self._add_profile_extrude(document, operation)
             elif isinstance(operation, Shell):
                 feature = self._add_shell(document, operation)
-            binding = bindings.get(operation_index)
-            if binding is not None:
-                self._bind_feature_parameter(feature, binding.expression)
+            elif isinstance(operation, CircularEdgeChamfer):
+                feature = self._add_circular_edge_chamfer(document, operation)
+            for binding in bindings.get(operation_index, []):
+                self._bind_feature_parameter(feature, binding.expression, target=binding.target)
 
     def _add_user_parameters(self, document: Any, parameters: dict[str, float]) -> None:
         if not parameters:
@@ -194,24 +232,75 @@ class InventorBackend:
                 f"Could not create Inventor UserParameters. Original COM error: {exc}"
             ) from exc
 
-    def _bind_feature_parameter(self, feature: Any | None, expression: str) -> None:
+    def _bind_feature_parameter(
+        self,
+        feature: Any | None,
+        expression: str,
+        *,
+        target: str = "extent",
+    ) -> None:
         if feature is None:
             raise InventorGeometryError(
-                f"Could not bind feature extent to parameter expression {expression!r}."
+                f"Could not bind feature {target} to parameter expression {expression!r}."
             )
-        for getter in (
-            lambda: feature.Extent.Distance,
-            lambda: feature.Definition.Extent.Distance,
-            lambda: feature.Definition.Distance,
-        ):
+        if target == "diameter":
+            self._bind_sketch_circle_diameter(feature, expression)
+            return
+        if target == "distance":
+            getters = (
+                lambda: feature.Definition.Distance,
+                lambda: feature.Parameters.Item(1),
+            )
+        elif target == "extent":
+            # With early-bound (gencache) wrappers, ExtrudeFeature.Extent is typed as the
+            # PartFeatureExtent base class, which hides Distance until cast.
+            getters = (
+                lambda: feature.Extent.Distance,
+                lambda: _cast_to(feature.Extent, "DistanceExtent").Distance,
+                lambda: feature.Definition.Extent.Distance,
+                lambda: _cast_to(feature.Definition.Extent, "DistanceExtent").Distance,
+                lambda: feature.Definition.Distance,
+            )
+        else:
+            raise InventorPlanError(f"Unsupported parameter target={target!r}.")
+        for getter in getters:
             try:
                 getter().Expression = expression
                 return
             except Exception:
                 continue
         raise InventorGeometryError(
-            f"Inventor did not expose a distance parameter for expression {expression!r}."
+            f"Inventor did not expose a {target} parameter for expression {expression!r}."
         )
+
+    def _bind_sketch_circle_diameter(self, feature: Any, expression: str) -> None:
+        """Ground the profile circle's center and drive its diameter by an expression."""
+
+        try:
+            try:
+                sketch = feature.Profile.Parent
+            except Exception:
+                sketch = feature.Definition.Profile.Parent
+            if int(sketch.SketchCircles.Count) != 1:
+                raise InventorGeometryError(
+                    "A diameter binding needs a profile sketch with exactly one circle."
+                )
+            circle = sketch.SketchCircles.Item(1)
+            sketch.GeometricConstraints.AddGround(circle.CenterSketchPoint)
+            center = circle.CenterSketchPoint.Geometry
+            text_point = self.app.TransientGeometry.CreatePoint2d(
+                center.X + circle.Radius,
+                center.Y + circle.Radius,
+            )
+            dimension = sketch.DimensionConstraints.AddDiameter(circle, text_point)
+            dimension.Parameter.Expression = expression
+        except InventorGeometryError:
+            raise
+        except Exception as exc:
+            raise InventorGeometryError(
+                f"Could not bind sketch circle diameter to {expression!r}. "
+                f"Original COM error: {exc}"
+            ) from exc
 
     def save_document(self, document: Any) -> None:
         try:
@@ -223,7 +312,10 @@ class InventorBackend:
 
     def new_assembly_document(self) -> Any:
         try:
-            return self.app.Documents.Add(self._constant("kAssemblyDocumentObject"))
+            document = self.app.Documents.Add(self._constant("kAssemblyDocumentObject"))
+            # Early-bound Documents.Add returns the generic Document interface, which
+            # hides ComponentDefinition until cast.
+            return _cast_to(document, "AssemblyDocument")
         except Exception as exc:
             raise InventorDocumentError(
                 f"Could not create an Inventor assembly document. Original COM error: {exc}"
@@ -237,14 +329,124 @@ class InventorBackend:
                 f"Could not close the Inventor document. Original COM error: {exc}"
             ) from exc
 
-    def export_stl(self, document: Any, path: str | Path) -> None:
+    def export_stl(
+        self,
+        document: Any,
+        path: str | Path,
+        *,
+        resolution: Literal["high", "medium", "low"] = "high",
+    ) -> None:
+        """Export a binary STL whose coordinates are in millimeters.
+
+        A plain ``SaveAs`` uses whatever units/resolution the STL translator last
+        saved, so the translator is driven with explicit options instead. If the
+        translator cannot be driven, fall back to ``SaveAs`` and warn.
+        """
+
         stl_path = path_with_suffix("path", Path(path), (STL_SUFFIX,))
+        if resolution not in STL_RESOLUTION_VALUES:
+            raise InventorPlanError(f"Unsupported STL resolution={resolution!r}.")
         stl_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._export_stl_with_translator(document, stl_path, resolution)
+            return
+        except Exception as translator_exc:
+            warnings.warn(
+                "Inventor STL translator options were unavailable; exported with "
+                "Document.SaveAs, which uses the translator's last saved units. "
+                f"Original COM error: {translator_exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         try:
             document.SaveAs(str(stl_path), True)
         except Exception as exc:
             raise InventorExportError(
                 f"Could not export STL to {stl_path}. Original COM error: {exc}"
+            ) from exc
+
+    def _export_stl_with_translator(
+        self,
+        document: Any,
+        stl_path: Path,
+        resolution: str,
+    ) -> None:
+        if stl_path.exists():
+            stl_path.unlink()
+        translator = _cast_to(
+            self.app.ApplicationAddIns.ItemById(STL_TRANSLATOR_ADDIN_ID),
+            "TranslatorAddIn",
+        )
+        # An inactive translator accepts SaveCopyAs but silently writes nothing.
+        if not translator.Activated:
+            translator.Activate()
+        transient_objects = self.app.TransientObjects
+        context = transient_objects.CreateTranslationContext()
+        context.Type = self._optional_constant("kFileBrowseIOMechanism", FILE_BROWSE_IO_MECHANISM)
+        options = transient_objects.CreateNameValueMap()
+        if not translator.HasSaveCopyAsOptions(document, context, options):
+            raise InventorExportError("The STL translator did not provide export options.")
+        _set_name_value(options, "ExportUnits", STL_EXPORT_UNITS_MM)
+        _set_name_value(options, "Resolution", STL_RESOLUTION_VALUES[resolution])
+        _set_name_value(options, "OutputFileType", 0)  # binary
+        medium = transient_objects.CreateDataMedium()
+        medium.FileName = str(stl_path.resolve())
+        translator.SaveCopyAs(document, context, options, medium)
+        if not stl_path.exists():
+            raise InventorExportError(f"The STL translator did not write {stl_path}.")
+
+    def _add_circular_edge_chamfer(
+        self,
+        document: Any,
+        operation: CircularEdgeChamfer,
+    ) -> Any:
+        label = "circular edge chamfer"
+        try:
+            component_definition = document.ComponentDefinition
+            radius_cm = mm_to_cm(mm_radius(operation.edge_diameter_mm))
+            center_cm = (
+                mm_to_cm(operation.x_mm),
+                mm_to_cm(operation.y_mm),
+                mm_to_cm(operation.z_mm),
+            )
+            circle_curve = self._optional_constant("kCircleCurve", CIRCLE_CURVE_TYPE)
+            tolerance_cm = 1e-5
+            edges = self.app.TransientObjects.CreateEdgeCollection()
+            bodies = component_definition.SurfaceBodies
+            for body_index in range(1, int(bodies.Count) + 1):
+                body_edges = bodies.Item(body_index).Edges
+                for edge_index in range(1, int(body_edges.Count) + 1):
+                    edge = body_edges.Item(edge_index)
+                    if int(edge.GeometryType) != circle_curve:
+                        continue
+                    circle = edge.Geometry
+                    center = circle.Center
+                    normal = circle.Normal
+                    if (
+                        abs(float(circle.Radius) - radius_cm) <= tolerance_cm
+                        and abs(float(center.X) - center_cm[0]) <= tolerance_cm
+                        and abs(float(center.Y) - center_cm[1]) <= tolerance_cm
+                        and abs(float(center.Z) - center_cm[2]) <= tolerance_cm
+                        and abs(abs(float(normal.Z)) - 1.0) <= 1e-9
+                    ):
+                        edges.Add(edge)
+            if int(edges.Count) == 0:
+                raise InventorGeometryError(
+                    f"No circular edge of diameter {operation.edge_diameter_mm:g} mm at "
+                    f"({operation.x_mm:g}, {operation.y_mm:g}, {operation.z_mm:g}) mm to chamfer."
+                )
+            feature = component_definition.Features.ChamferFeatures.AddUsingDistance(
+                edges,
+                mm_to_cm(operation.distance_mm),
+            )
+            _try_set_attribute(feature, "Name", label)
+            return feature
+        except InventorGeometryError:
+            raise
+        except Exception as exc:
+            raise InventorGeometryError(
+                f"Could not create {label} of {operation.distance_mm:g} mm. "
+                f"Original COM error: {exc}"
             ) from exc
 
     def _add_outer_cylinder(self, document: Any, operation: OuterCylinder) -> Any:
@@ -637,6 +839,10 @@ class InventorBackend:
             )
         return int(value)
 
+    def _optional_constant(self, name: str, default: int) -> int:
+        value = getattr(self.constants, name, None)
+        return default if value is None else int(value)
+
 
 def _try_set_attribute(target: Any, name: str, value: object) -> bool:
     try:
@@ -644,6 +850,28 @@ def _try_set_attribute(target: Any, name: str, value: object) -> bool:
     except Exception:
         return False
     return True
+
+
+def _cast_to(target: Any, interface: str) -> Any:
+    """Cast an early-bound COM wrapper to a derived interface; no-op if unavailable."""
+
+    try:
+        win32_client = cast(Any, import_module("win32com.client"))
+        return win32_client.CastTo(target, interface)
+    except Exception:
+        return target
+
+
+def _set_name_value(options: Any, name: str, value: object) -> None:
+    """Set an existing entry of an Inventor NameValueMap."""
+
+    try:
+        options.SetValue(name, value)
+    except AttributeError:
+        # Late-bound NameValueMap: Value is a parameterized property, so put it directly.
+        pythoncom = cast(Any, import_module("pythoncom"))
+        dispid = options._oleobj_.GetIDsOfNames("Value")
+        options._oleobj_.Invoke(dispid, 0, pythoncom.DISPATCH_PROPERTYPUT, 0, name, value)
 
 
 def _inventor_fallback_constants() -> Any:
@@ -655,8 +883,10 @@ def _inventor_fallback_constants() -> Any:
         kJoinOperation=JOIN_OPERATION,
         kCutOperation=CUT_OPERATION,
         kPositiveExtentDirection=POSITIVE_EXTENT_DIRECTION,
-        kNegativeExtentDirection=20994,
-        kSymmetricExtentDirection=20995,
+        kNegativeExtentDirection=NEGATIVE_EXTENT_DIRECTION,
+        kSymmetricExtentDirection=SYMMETRIC_EXTENT_DIRECTION,
+        kCircleCurve=CIRCLE_CURVE_TYPE,
+        kFileBrowseIOMechanism=FILE_BROWSE_IO_MECHANISM,
     )
 
 

@@ -31,6 +31,11 @@ class InventorApp:
     ) -> Any:
         return self.backend.new_part_document(name=name, path=path, template=template)
 
+    def quit_if_launched(self) -> bool:
+        """Quit Inventor if this connection started it (see InventorBackend)."""
+
+        return self.backend.quit_if_launched()
+
 
 def connect(*, visible: bool = True) -> InventorApp:
     """Connect to Autodesk Inventor through COM."""

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,9 +15,19 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _open(app: Any, path: Path, interface: str) -> Any:
+    """Open a document and cast the generic early-bound Document to its real interface."""
+
+    import win32com.client
+
+    return win32com.client.CastTo(app.raw.Documents.Open(str(path), False), interface)
+
+
 @pytest.mark.inventor
-def test_astro_controller_parts_parameters_and_assembly(inventor_tmp_path: Path) -> None:
-    app = api.connect(visible=False)
+def test_astro_controller_parts_parameters_and_assembly(
+    inventor_app: Any, inventor_tmp_path: Path
+) -> None:
+    app = inventor_app
     enclosure = api.astro_controller_enclosure_plan()
     base_path = inventor_tmp_path / "astro_controller_base.ipt"
     lid_path = inventor_tmp_path / "astro_controller_lid.ipt"
@@ -44,7 +55,7 @@ def test_astro_controller_parts_parameters_and_assembly(inventor_tmp_path: Path)
         (lid_path, {"lidT", "oledPocketDepth"}),
     )
     for path, expected_driven in driven_parameters:
-        document = app.raw.Documents.Open(str(path), False)
+        document = _open(app, path, "PartDocument")
         try:
             assert int(document.DocumentType) == part_document_type
             assert int(document.ComponentDefinition.SurfaceBodies.Count) >= 1
@@ -59,7 +70,7 @@ def test_astro_controller_parts_parameters_and_assembly(inventor_tmp_path: Path)
         finally:
             document.Close(False)
 
-    document = app.raw.Documents.Open(str(assembly_path), False)
+    document = _open(app, assembly_path, "AssemblyDocument")
     try:
         assert int(document.DocumentType) == assembly_document_type
         assert int(document.ComponentDefinition.Occurrences.Count) == 2

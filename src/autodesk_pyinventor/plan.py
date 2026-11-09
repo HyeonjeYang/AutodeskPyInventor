@@ -16,7 +16,10 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 PlaneName: TypeAlias = Literal["XY", "YZ", "XZ"]
 FeatureOperation: TypeAlias = Literal["join", "cut"]
 ExtentDirection: TypeAlias = Literal["positive", "negative"]
-ParameterTarget: TypeAlias = Literal["extent"]
+# extent: an extrude distance; diameter: the sketch circle of a circle extrude;
+# distance: the setback of a chamfer.
+ParameterTarget: TypeAlias = Literal["extent", "diameter", "distance"]
+PARAMETER_TARGETS: tuple[str, ...] = ("extent", "diameter", "distance")
 
 
 def _clean_number(value: float) -> int | float:
@@ -374,6 +377,41 @@ class Shell:
 
 
 @dataclass(frozen=True)
+class CircularEdgeChamfer:
+    """Equal-distance (45 degree) chamfer on an existing circular edge.
+
+    The edge is selected geometrically after the preceding features run: a circle
+    of ``edge_diameter_mm`` whose center is ``(x_mm, y_mm, z_mm)`` and whose axis
+    is parallel to Z. Use it for bore entry chamfers that extrudes cannot express.
+    """
+
+    edge_diameter_mm: float
+    z_mm: float
+    distance_mm: float
+    x_mm: float = 0.0
+    y_mm: float = 0.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "edge_diameter_mm", positive_mm("edge_diameter_mm", self.edge_diameter_mm)
+        )
+        object.__setattr__(self, "z_mm", numeric_mm("z_mm", self.z_mm))
+        object.__setattr__(self, "distance_mm", positive_mm("distance_mm", self.distance_mm))
+        object.__setattr__(self, "x_mm", numeric_mm("x_mm", self.x_mm))
+        object.__setattr__(self, "y_mm", numeric_mm("y_mm", self.y_mm))
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "type": "circular_edge_chamfer",
+            "edge_diameter": _clean_number(self.edge_diameter_mm),
+            "x": _clean_number(self.x_mm),
+            "y": _clean_number(self.y_mm),
+            "z": _clean_number(self.z_mm),
+            "distance": _clean_number(self.distance_mm),
+        }
+
+
+@dataclass(frozen=True)
 class ParameterBinding:
     """Bind one generated feature property to an Inventor expression."""
 
@@ -384,7 +422,7 @@ class ParameterBinding:
     def __post_init__(self) -> None:
         if self.operation_index < 0:
             raise InventorPlanError("ParameterBinding operation_index must be non-negative.")
-        if self.target != "extent":
+        if self.target not in PARAMETER_TARGETS:
             raise InventorPlanError(f"Unsupported parameter target={self.target!r}.")
         if not self.expression.strip():
             raise InventorPlanError("ParameterBinding expression must not be empty.")
@@ -408,7 +446,25 @@ Operation: TypeAlias = (
     | AnnularSectorExtrude
     | ProfileExtrude
     | Shell
+    | CircularEdgeChamfer
 )
+
+# Which feature property each binding target may address, per operation type.
+_EXTENT_TARGET_TYPES = (
+    OuterCylinder,
+    RectangleExtrude,
+    CircleExtrude,
+    OrientedRectangleExtrude,
+    PolygonExtrude,
+    AnnularSectorExtrude,
+    ProfileExtrude,
+    Shell,
+)
+_BINDABLE_TYPES: dict[str, tuple[type, ...]] = {
+    "extent": _EXTENT_TARGET_TYPES,
+    "diameter": (OuterCylinder, CircleExtrude),
+    "distance": (CircularEdgeChamfer,),
+}
 
 
 @dataclass
@@ -608,6 +664,12 @@ class FeaturePlan:
                 raise InventorPlanError(
                     f"ParameterBinding operation_index={binding.operation_index} is out of range."
                 )
+            bound_operation = self.operations[binding.operation_index]
+            if not isinstance(bound_operation, _BINDABLE_TYPES[binding.target]):
+                raise InventorPlanError(
+                    f"ParameterBinding target={binding.target!r} cannot bind operation "
+                    f"{binding.operation_index} ({bound_operation.to_dict()['type']})."
+                )
 
         outer_diameters: list[float] = []
         deferred_bores: list[DeferredCenterBore] = []
@@ -654,6 +716,11 @@ class FeaturePlan:
             elif isinstance(operation, Shell):
                 if not saw_solid:
                     raise InventorPlanError(f"operation {index} shell requires a preceding solid.")
+            elif isinstance(operation, CircularEdgeChamfer):
+                if not saw_solid:
+                    raise InventorPlanError(
+                        f"operation {index} circular_edge_chamfer requires a preceding solid."
+                    )
             else:
                 raise InventorPlanError(
                     f"operation {index} has unsupported type {type(operation)!r}."
@@ -838,6 +905,16 @@ class FeaturePlan:
                     f"thickness={_format_number(operation.thickness_mm)})"
                 )
                 operation_number += 1
+            elif isinstance(operation, CircularEdgeChamfer):
+                lines.append(
+                    "  "
+                    f"{operation_number}. chamfer_circular_edge("
+                    f"diameter={_format_number(operation.edge_diameter_mm)}, "
+                    f"center=({_format_number(operation.x_mm)},{_format_number(operation.y_mm)},"
+                    f"{_format_number(operation.z_mm)}), "
+                    f"distance={_format_number(operation.distance_mm)})"
+                )
+                operation_number += 1
 
         if include_save:
             lines.append(f"  {operation_number}. save()")
@@ -892,14 +969,14 @@ class FeaturePlan:
             if (
                 isinstance(operation_index, bool)
                 or not isinstance(operation_index, int)
-                or target != "extent"
+                or target not in PARAMETER_TARGETS
                 or not isinstance(expression, str)
             ):
                 raise InventorPlanError("Invalid FeaturePlan parameter binding.")
             bindings.append(
                 ParameterBinding(
                     operation_index=operation_index,
-                    target="extent",
+                    target=cast(ParameterTarget, target),
                     expression=expression,
                 )
             )
@@ -1021,6 +1098,14 @@ def operation_from_dict(data: Mapping[str, JsonValue]) -> Operation:
             outer_height_mm=float(_required_number(data, "outer_height")),
             thickness_mm=float(_required_number(data, "thickness")),
             open_face=cast(Literal["top"], data.get("open_face", "top")),
+        )
+    if operation_type == "circular_edge_chamfer":
+        return CircularEdgeChamfer(
+            edge_diameter_mm=float(_required_number(data, "edge_diameter")),
+            x_mm=float(_required_number(data, "x")),
+            y_mm=float(_required_number(data, "y")),
+            z_mm=float(_required_number(data, "z")),
+            distance_mm=float(_required_number(data, "distance")),
         )
     raise InventorPlanError(f"Unsupported operation type={operation_type!r}.")
 
